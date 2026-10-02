@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile Python
+        run: python -m compileall -q app
+      - name: Validate Compose
+        run: docker compose config -q
+        env:
+          PORTAINER_URL: https://127.0.0.1:9443
+          PORTAINER_TOKEN: test
+          MOVER_USER: admin
+          MOVER_PASSWORD: test-password
+          MOVER_SESSION_SECRET: 12345678901234567890123456789012
+      - name: Build image
+        run: docker build -t dc1-mover:ci .
