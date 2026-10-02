@@ -259,10 +259,8 @@ async def docker_request(endpoint_id, method, path, **kwargs):
     async with client() as c:
         url = "/api/endpoints/" + str(endpoint_id) + "/docker" + path
         if method.upper() == "POST" and "json" not in kwargs and "content" not in kwargs and "data" not in kwargs and "files" not in kwargs:
-            req = c.build_request(method, url, **kwargs)
-            req.headers.pop("Content-Length", None)
-            req.headers.pop("Transfer-Encoding", None)
-            return await c.send(req)
+            # Portainer's Docker proxy requires an explicit zero-length payload.
+            return await c.request(method, url, content=b"", headers={"Content-Length": "0"}, **kwargs)
         return await c.request(method, url, **kwargs)
 
 async def wait_container(endpoint_id, container_id, timeout=300):
