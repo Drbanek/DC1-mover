@@ -12,13 +12,28 @@ async def inventory():
 @app.get("/api/stacks/{stack_id}/detail")
 async def stack_detail(stack_id: int): return await build_detail(stack_id)
 
+@app.get("/api/endpoints/settings")
+async def endpoint_settings_list(session=Depends(current_session)):
+    endpoints = await get_endpoints(); settings = get_endpoint_settings(); result = []
+    for endpoint in endpoints:
+        eid = int(endpoint["Id"]); setting = settings.get(eid, {})
+        result.append({"id": eid, "name": endpoint.get("Name") or ("Endpoint " + str(eid)), "url": endpoint.get("URL") or "", "migration_enabled": bool(setting.get("migration_enabled", False)), "host_ip": setting.get("host_ip", ""), "site": setting.get("site", "")})
+    return result
+
+@app.put("/api/endpoints/{endpoint_id}/settings")
+async def endpoint_settings_save(endpoint_id: int, request: Request, session=Depends(require_csrf)):
+    endpoints = await get_endpoints()
+    if not any(int(e["Id"]) == endpoint_id for e in endpoints): raise HTTPException(404, "Endpoint not found")
+    payload = await request.json(); save_endpoint_setting(endpoint_id, bool(payload.get("migration_enabled")), str(payload.get("host_ip") or ""), str(payload.get("site") or ""))
+    return {"ok": True}
+
 @app.get("/api/stacks/{stack_id}/targets")
 async def migration_targets(stack_id: int):
     detail = await build_detail(stack_id); endpoints = await get_endpoints(); targets = []
     for endpoint in endpoints:
         if endpoint["Id"] == detail["stack"]["endpoint_id"]: continue
-        name = endpoint.get("Name", "")
-        if not name.startswith("DC1-NODE"): continue
+        if endpoint not in migration_endpoints(endpoints): continue
+        name = endpoint.get("Name", "") or ("Endpoint " + str(endpoint["Id"]))
         targets.append({"id": endpoint["Id"], "name": name})
     return {"source": {"id": detail["stack"]["endpoint_id"], "name": detail["stack"]["endpoint"]}, "targets": targets}
 
@@ -60,8 +75,10 @@ async def preflight(stack_id: int, target_id: int):
     return {"version": "1.0.0", "read_only": True, "ready": len(blocking) == 0, "stack": detail["stack"], "target": {"id": target["Id"], "name": target["Name"]}, "containers": len(detail["containers"]), "volumes": [v["name"] for v in detail["volumes"]], "checks": checks}
 
 def endpoint_host_ip(endpoint):
+    endpoint_id = int((endpoint or {}).get("Id") or 0); setting = get_endpoint_settings().get(endpoint_id, {})
+    if setting.get("host_ip"): return setting["host_ip"]
     url = (endpoint or {}).get("URL") or ""; m = re.match(r"^tcp://(\[[^\]]+\]|[^:]+)(?::\d+)?$", url)
-    if not m: raise RuntimeError("Cannot determine target host IP from endpoint URL: " + url)
+    if not m: raise RuntimeError("Cannot determine host IP automatically. Set Host IP for this endpoint in Endpoint settings.")
     return m.group(1).strip("[]")
 
 def rewrite_host_bind_ip(stack_file, source_endpoint, target_endpoint):
