@@ -62,3 +62,37 @@ td:last-child button { display: inline-block; margin: 2px 4px 2px 0 !important; 
   table { min-width:680px; }
   .header { align-items:flex-start; flex-wrap:wrap; }
 }
+
+/* DNS records can contain very long validation names/values. Wrap them instead of widening the page. */
+#dnsRecords { max-width:100%; overflow-x:hidden; }
+#dnsRecords table { min-width:0; width:100%; table-layout:fixed; }
+#dnsRecords th, #dnsRecords td { min-width:0; vertical-align:top; }
+#dnsRecords .dns-name { width:29%; overflow-wrap:anywhere; word-break:break-word; }
+#dnsRecords .dns-type { width:8%; white-space:nowrap; }
+#dnsRecords .dns-value { width:auto; overflow-wrap:anywhere; word-break:break-word; }
+#dnsRecords .dns-ttl { width:7%; white-space:nowrap; }
+#dnsRecords .dns-actions { width:150px; white-space:normal; }
+#dnsRecords .dns-actions button { white-space:nowrap; }
+@media(max-width:760px){
+  #dnsRecords .dns-name { width:28%; }
+  #dnsRecords .dns-type { width:11%; }
+  #dnsRecords .dns-ttl { width:10%; }
+  #dnsRecords .dns-actions { width:100px; }
+}
+
+/* Keep selects visually aligned with text/number inputs. */
+.formgrid select,
+.formrow select {
+  height: 58px;
+  min-height: 58px;
+  padding: 0 14px;
+  line-height: 58px;
+}
+
+.capacityDisk { margin-top:12px; }
+.capacityDiskHead { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-bottom:7px; }
+.capacityBar { height:10px; width:100%; overflow:hidden; border-radius:999px; background:#1e293b; margin-bottom:7px; }
+.capacityBarFill { height:100%; border-radius:999px; transition:width .25s ease; }
+.capacityBarFill.ok { background:#059669; }
+.capacityBarFill.warning { background:#d97706; }
+.capacityBarFill.danger { background:#dc2626; }
