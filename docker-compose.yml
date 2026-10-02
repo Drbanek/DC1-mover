@@ -2,7 +2,6 @@ services:
   mover:
     image: ghcr.io/drbanek/dc1-mover:latest
     pull_policy: always
-    container_name: dc1-mover
     restart: unless-stopped
     environment:
       PORTAINER_URL: "${PORTAINER_URL}"
