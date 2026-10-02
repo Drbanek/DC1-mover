@@ -85,6 +85,33 @@ def init_db():
                 created_at TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS endpoint_settings (
+                endpoint_id INTEGER PRIMARY KEY,
+                migration_enabled INTEGER NOT NULL DEFAULT 0,
+                host_ip TEXT,
+                site TEXT,
+                updated_at TEXT NOT NULL
+            )
+        """)
+
+def get_endpoint_settings():
+    with db() as conn:
+        rows = conn.execute("SELECT * FROM endpoint_settings").fetchall()
+    return {int(r["endpoint_id"]): {"migration_enabled": bool(r["migration_enabled"]), "host_ip": r["host_ip"] or "", "site": r["site"] or ""} for r in rows}
+
+def save_endpoint_setting(endpoint_id, migration_enabled, host_ip="", site=""):
+    with db() as conn:
+        conn.execute("""
+            INSERT INTO endpoint_settings(endpoint_id, migration_enabled, host_ip, site, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(endpoint_id) DO UPDATE SET migration_enabled=excluded.migration_enabled,
+            host_ip=excluded.host_ip, site=excluded.site, updated_at=excluded.updated_at
+        """, (int(endpoint_id), 1 if migration_enabled else 0, (host_ip or "").strip(), (site or "").strip(), utcnow()))
+
+def migration_endpoints(endpoints):
+    settings = get_endpoint_settings()
+    return [e for e in endpoints if settings.get(int(e["Id"]), {}).get("migration_enabled", False)]
 
 def acquire_stack_lock(stack_id, job_id):
     try:
