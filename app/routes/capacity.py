@@ -22,7 +22,18 @@ async def host_disk_usage(endpoint_id, docker_root):
         start = await docker_request(endpoint_id, "POST", f"/containers/{helper}/start")
         if start.status_code != 204:
             raise RuntimeError("disk helper start failed: " + start.text)
-        await wait_container(endpoint_id, helper, timeout=30)
+        # Wait for the short-lived helper without relying on the migration helper API.
+        # The previous implementation called wait_container(), which does not exist;
+        # that exception was swallowed by node_capacity() and rendered "nelze zjistit".
+        for _ in range(30):
+            inspect = await docker_request(endpoint_id, "GET", f"/containers/{helper}/json")
+            if inspect.status_code != 200:
+                raise RuntimeError("disk helper inspect failed: " + inspect.text)
+            if not bool((inspect.json().get("State") or {}).get("Running")):
+                break
+            await asyncio.sleep(0.2)
+        else:
+            raise RuntimeError("disk helper timed out")
         logs = await docker_request(endpoint_id, "GET", f"/containers/{helper}/logs?stdout=1&stderr=1")
         line = logs.text.strip().splitlines()[-1].replace("\x01", "").replace("\x00", "").strip()
         parts = line.split()
@@ -58,9 +69,12 @@ async def node_capacity(endpoint):
     disk = None
     try:
         disk = await host_disk_usage(endpoint_id, docker_root)
-    except Exception:
+    except Exception as exc:
         disk = None
-    return {"id": endpoint_id, "name": endpoint["Name"], "cpu_count": cpus, "ram_total": total_ram, "ram_used_containers": used_ram, "ram_available_estimate": available_ram, "running_containers": running, "cpu_percent_containers": round(cpu_percent_total, 1), "docker_images_size": images_size, "docker_volumes_size": volumes_size, "docker_used_estimate": docker_used, "ram_total_human": fmt_bytes(total_ram), "ram_used_human": fmt_bytes(used_ram), "ram_available_human": fmt_bytes(available_ram), "docker_used_human": fmt_bytes(docker_used), "docker_root": docker_root, "disk_total": disk["total"] if disk else None, "disk_used": disk["used"] if disk else None, "disk_free": disk["free"] if disk else None, "disk_percent": disk["percent"] if disk else None, "disk_total_human": fmt_bytes(disk["total"]) if disk else None, "disk_used_human": fmt_bytes(disk["used"]) if disk else None, "disk_free_human": fmt_bytes(disk["free"]) if disk else None}
+        disk_error = str(exc)
+    else:
+        disk_error = None
+    return {"id": endpoint_id, "name": endpoint["Name"], "cpu_count": cpus, "ram_total": total_ram, "ram_used_containers": used_ram, "ram_available_estimate": available_ram, "running_containers": running, "cpu_percent_containers": round(cpu_percent_total, 1), "docker_images_size": images_size, "docker_volumes_size": volumes_size, "docker_used_estimate": docker_used, "ram_total_human": fmt_bytes(total_ram), "ram_used_human": fmt_bytes(used_ram), "ram_available_human": fmt_bytes(available_ram), "docker_used_human": fmt_bytes(docker_used), "docker_root": docker_root, "disk_total": disk["total"] if disk else None, "disk_used": disk["used"] if disk else None, "disk_free": disk["free"] if disk else None, "disk_percent": disk["percent"] if disk else None, "disk_total_human": fmt_bytes(disk["total"]) if disk else None, "disk_used_human": fmt_bytes(disk["used"]) if disk else None, "disk_free_human": fmt_bytes(disk["free"]) if disk else None, "disk_error": disk_error}
 
 @app.get("/api/cluster")
 async def cluster_dashboard(session=Depends(require_permission("dashboard_read"))):

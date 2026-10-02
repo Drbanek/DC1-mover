@@ -143,3 +143,18 @@ td:last-child button { display: inline-block; margin: 2px 4px 2px 0 !important; 
   line-height:normal !important;
 }
 #dnsEditor select { appearance:auto; -webkit-appearance:menulist; }
+
+/* Settings controls use one compact, consistent height. */
+#tab-settings .settingsGrid { align-items:end; }
+#tab-settings .settingsGrid label { display:flex; flex-direction:column; min-width:0; }
+#tab-settings .settingsGrid input,
+#tab-settings .settingsGrid select {
+  box-sizing:border-box;
+  height:46px !important;
+  min-height:46px !important;
+  max-height:46px !important;
+  margin-top:6px;
+  padding:0 12px !important;
+  line-height:normal !important;
+}
+#tab-settings .settingsGrid select { appearance:auto; -webkit-appearance:menulist; }
