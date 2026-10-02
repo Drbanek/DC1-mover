@@ -1,8 +1,8 @@
-# Portainer Stack Mover – Docker build, deployment and migration guide
+# DockerStackMover – Docker build, deployment and migration guide
 
 [Čeština](KOMPILACE-DOCKER.md) | **English**
 
-This document describes the complete setup used for **Portainer Stack Mover v1.0.0**: building the application, publishing the Docker image to GHCR, deploying it through Portainer, configuring Docker endpoints, and performing a safe stack migration with rollback.
+This document describes the complete setup used for **DockerStackMover v1.0.0**: building the application, publishing the Docker image to GHCR, deploying it through Portainer, configuring Docker endpoints, and performing a safe stack migration with rollback.
 
 > The goal of v1.0.0 is intentionally narrow: reliably migrate a Docker Compose/Portainer stack and its named volumes between selected Docker endpoints. DNS automation and cross-site traffic switching are planned as a separate follow-up.
 
@@ -25,7 +25,7 @@ Internet
 
 Management
    +-- Portainer
-   +-- Portainer Stack Mover
+   +-- DockerStackMover
 ```
 
 Endpoint names are arbitrary. The application does **not** require names such as `DC1-NODE01`. Migration-capable endpoints are explicitly enabled in the Mover UI.
@@ -77,7 +77,7 @@ This is intentional. Building a Compose stack remotely through a Portainer Agent
 The resulting image is:
 
 ```text
-ghcr.io/drbanek/dc1-mover:latest
+ghcr.io/drbanek/dockerstackmover:latest
 ```
 
 A commit-specific image is also published by CI, allowing a deployment to be tied to a particular source revision.
@@ -96,7 +96,7 @@ GitHub Actions
    |
    v
 GHCR
-ghcr.io/drbanek/dc1-mover
+ghcr.io/drbanek/dockerstackmover
    |
    v
 Portainer
@@ -116,7 +116,7 @@ The recommended deployment is a **Git repository stack** in Portainer.
 Repository:
 
 ```text
-https://github.com/Drbanek/DC1-mover
+https://github.com/Drbanek/DockerStackMover
 ```
 
 Reference:
@@ -347,7 +347,7 @@ The next logical extension is DNS integration for migrations between sites.
 Initial target:
 
 ```text
-Portainer Stack Mover
+DockerStackMover
   |
   +-- Migration engine (v1.0.0)
   |
