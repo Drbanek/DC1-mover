@@ -23,7 +23,7 @@ async def first_setup(request: Request):
     setting_set("portainer_token", portainer_token, True)
     setting_set("vas_hosting_api_key", str(p.get("vas_hosting_api_key") or "").strip(), True)
     setting_set("vas_hosting_api_url", str(p.get("vas_hosting_api_url") or "https://portal.vas-hosting.cz/api/v1").strip())
-    return {"ok": True, "restart_required": True}
+    return {"ok": True, "restart_required": False}
 
 @app.get("/api/app-settings")
 async def app_settings(session=Depends(current_session)):
@@ -41,7 +41,7 @@ async def app_settings_save(request: Request, session=Depends(require_csrf)):
     if p.get("portainer_token"): setting_set("portainer_token", str(p["portainer_token"]).strip(), True)
     if p.get("vas_hosting_api_key"): setting_set("vas_hosting_api_key", str(p["vas_hosting_api_key"]).strip(), True)
     if "vas_hosting_api_url" in p: setting_set("vas_hosting_api_url", str(p["vas_hosting_api_url"]).strip().rstrip("/"))
-    return {"ok": True, "restart_required": True}
+    return {"ok": True, "restart_required": False}
 
 @app.put("/api/account/password")
 async def account_password(request: Request, session=Depends(require_csrf)):
