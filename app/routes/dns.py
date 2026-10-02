@@ -1,0 +1,45 @@
+from ..core import *
+
+async def _vas_request(method, path, payload=None):
+    if not vas_hosting_enabled():
+        raise HTTPException(409, "Váš Hosting API není nakonfigurováno")
+    async with httpx.AsyncClient(base_url=VAS_HOSTING_API_URL, headers={"X-API-Key": VAS_HOSTING_API_KEY, "Content-Type": "application/json"}, timeout=30) as c:
+        r = await c.request(method, path, json=payload)
+        if r.status_code not in (200, 201, 204):
+            raise HTTPException(r.status_code, "Váš Hosting API: " + r.text[:500])
+        if not r.content:
+            return None
+        try: return r.json()
+        except Exception: return None
+
+@app.get("/api/dns/status")
+async def dns_status(session=Depends(current_session)):
+    return {"provider": "vas-hosting", "configured": vas_hosting_enabled()}
+
+@app.get("/api/dns/domains")
+async def dns_domains(session=Depends(current_session)):
+    data = await _vas_request("GET", "/domains")
+    return [{"name": name, **meta} for name, meta in sorted((data or {}).items())]
+
+@app.get("/api/dns/domains/{zone}/records")
+async def dns_records(zone: str, session=Depends(current_session)):
+    return await vas_dns_records(zone)
+
+@app.post("/api/dns/domains/{zone}/records")
+async def dns_create(zone: str, request: Request, session=Depends(require_csrf)):
+    payload = await request.json()
+    allowed = {k: payload.get(k) for k in ("name","content","type","ttl","priority","note","isCloudflareProxy") if k in payload}
+    await _vas_request("POST", "/domains/" + zone + "/dns-records", allowed)
+    return {"ok": True, "records": await vas_dns_records(zone)}
+
+@app.put("/api/dns/domains/{zone}/records/{record_id}")
+async def dns_update(zone: str, record_id: str, request: Request, session=Depends(require_csrf)):
+    payload = await request.json()
+    allowed = {k: payload.get(k) for k in ("name","content","type","ttl","priority","note","isCloudflareProxy") if k in payload}
+    await _vas_request("POST", "/domains/" + zone + "/dns-records/" + record_id, allowed)
+    return {"ok": True, "records": await vas_dns_records(zone)}
+
+@app.delete("/api/dns/domains/{zone}/records/{record_id}")
+async def dns_delete(zone: str, record_id: str, session=Depends(require_csrf)):
+    await _vas_request("DELETE", "/domains/" + zone + "/dns-records/" + record_id)
+    return {"ok": True, "records": await vas_dns_records(zone)}
