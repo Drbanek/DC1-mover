@@ -1,5 +1,7 @@
 # Portainer Stack Mover – Docker build, deployment and migration guide
 
+[Čeština](KOMPILACE-DOCKER.md) | **English**
+
 This document describes the complete setup used for **Portainer Stack Mover v1.0.0**: building the application, publishing the Docker image to GHCR, deploying it through Portainer, configuring Docker endpoints, and performing a safe stack migration with rollback.
 
 > The goal of v1.0.0 is intentionally narrow: reliably migrate a Docker Compose/Portainer stack and its named volumes between selected Docker endpoints. DNS automation and cross-site traffic switching are planned as a separate follow-up.
