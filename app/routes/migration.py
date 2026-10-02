@@ -84,7 +84,7 @@ async def migration_worker(job):
         job["status"] = "failed"; persist_job(job); release_stack_lock(job["stack_id"], job["id"])
 
 @app.post("/api/stacks/{stack_id}/migrate/{target_id}")
-async def migrate(stack_id: int, target_id: int):
+async def migrate(stack_id: int, target_id: int, session=Depends(require_csrf)):
     active = next((j for j in load_recent_jobs(100) if j["stack_id"] == stack_id and j["status"] in ("queued", "running", "rollback")), None)
     if active: return {"job_id": active["id"], "status": active["status"]}
     job = new_job(stack_id, target_id); asyncio.create_task(migration_worker(job)); return {"job_id": job["id"], "status": job["status"]}
@@ -92,8 +92,8 @@ async def migrate(stack_id: int, target_id: int):
 @app.post("/api/login")
 async def login(request: Request):
     payload = await request.json(); user = str(payload.get("username", "")); password = str(payload.get("password", ""))
-    if not hmac.compare_digest(user, MOVER_USER) or not password_ok(password): raise HTTPException(401, "Invalid credentials")
-    token, csrf = new_session(); response = Response(content=json.dumps({"ok": True, "csrf": csrf}), media_type="application/json")
+    if not authenticate(user, password): raise HTTPException(401, "Invalid credentials")
+    token, csrf = new_session(); sessions[token]["user"] = user; response = Response(content=json.dumps({"ok": True, "csrf": csrf}), media_type="application/json")
     response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="strict", secure=False, max_age=28800); return response
 
 @app.post("/api/logout")

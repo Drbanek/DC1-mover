@@ -1,26 +1,12 @@
 services:
-  mover:
+  dockerstackmover:
     image: ghcr.io/drbanek/dockerstackmover:latest
     pull_policy: always
     restart: unless-stopped
-    environment:
-      PORTAINER_URL: "${PORTAINER_URL}"
-      PORTAINER_TOKEN: "${PORTAINER_TOKEN}"
-      MOVER_USER: "${MOVER_USER:-admin}"
-      MOVER_PASSWORD: "${MOVER_PASSWORD}"
-      MOVER_SESSION_SECRET: "${MOVER_SESSION_SECRET}"
-      VAS_HOSTING_API_KEY: "${VAS_HOSTING_API_KEY:-}"
-      VAS_HOSTING_API_URL: "${VAS_HOSTING_API_URL:-https://portal.vas-hosting.cz/api/v1}"
     ports:
       - "${MOVER_BIND_IP:-127.0.0.1}:${MOVER_PORT:-8081}:8080"
     volumes:
-      - mover-data:/data
-    networks:
-      - mover
+      - dockerstackmover-data:/data
 
 volumes:
-  mover-data:
-
-networks:
-  mover:
-    driver: bridge
+  dockerstackmover-data:

@@ -14,8 +14,8 @@ from fastapi.responses import HTMLResponse, Response
 
 app = FastAPI(title="DC1 Mover")
 
-PORTAINER_URL = os.environ["PORTAINER_URL"].rstrip("/")
-PORTAINER_TOKEN = os.environ["PORTAINER_TOKEN"]
+PORTAINER_URL = os.getenv("PORTAINER_URL", "").rstrip("/")
+PORTAINER_TOKEN = os.getenv("PORTAINER_TOKEN", "")
 headers = {"X-API-Key": PORTAINER_TOKEN}
 
 VAS_HOSTING_API_KEY = os.getenv("VAS_HOSTING_API_KEY", "").strip()
@@ -28,13 +28,18 @@ SESSION_SECRET = os.getenv("MOVER_SESSION_SECRET", "")
 SESSION_COOKIE = "dc1_mover_session"
 sessions = {}
 
-if not MOVER_PASSWORD:
-    raise RuntimeError("MOVER_PASSWORD is required")
-if len(SESSION_SECRET) < 32:
-    raise RuntimeError("MOVER_SESSION_SECRET must contain at least 32 characters")
+def password_hash(value, salt=None):
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", value.encode(), salt.encode(), 310000).hex()
+    return salt + "$" + digest
 
-def password_ok(value):
-    return hmac.compare_digest(value or "", MOVER_PASSWORD)
+def password_verify(value, stored):
+    try:
+        salt, expected = stored.split("$", 1)
+        actual = password_hash(value, salt).split("$", 1)[1]
+        return hmac.compare_digest(actual, expected)
+    except Exception:
+        return False
 
 def new_session():
     token = secrets.token_urlsafe(32)
@@ -101,6 +106,8 @@ def init_db():
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(endpoint_settings)").fetchall()}
         if "public_ip" not in columns:
             conn.execute("ALTER TABLE endpoint_settings ADD COLUMN public_ip TEXT")
+        conn.execute("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, secret INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)")
+        conn.execute("CREATE TABLE IF NOT EXISTS app_users (username TEXT PRIMARY KEY, password_hash TEXT NOT NULL, updated_at TEXT NOT NULL)")
 
 def get_endpoint_settings():
     with db() as conn:
@@ -169,7 +176,38 @@ def job_step(job, name, state, message=""):
     else: job["steps"].append(payload)
     persist_job(job)
 
+def setting_get(key, default=""):
+    with db() as conn:
+        row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+def setting_set(key, value, secret=False):
+    with db() as conn:
+        conn.execute("INSERT INTO app_settings(key,value,secret,updated_at) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, secret=excluded.secret, updated_at=excluded.updated_at", (key, str(value or ""), 1 if secret else 0, utcnow()))
+
+def setup_required():
+    with db() as conn:
+        return conn.execute("SELECT 1 FROM app_users LIMIT 1").fetchone() is None
+
+def create_admin(username, password):
+    if not username or len(password) < 10:
+        raise ValueError("Username is required and password must have at least 10 characters")
+    with db() as conn:
+        conn.execute("INSERT INTO app_users(username,password_hash,updated_at) VALUES(?,?,?)", (username.strip(), password_hash(password), utcnow()))
+
+def authenticate(username, password):
+    with db() as conn:
+        row = conn.execute("SELECT password_hash FROM app_users WHERE username = ?", (username,)).fetchone()
+    if row:
+        return password_verify(password, row["password_hash"])
+    return bool(MOVER_PASSWORD) and hmac.compare_digest(username, MOVER_USER) and hmac.compare_digest(password, MOVER_PASSWORD)
+
 init_db()
+PORTAINER_URL = setting_get("portainer_url", PORTAINER_URL).rstrip("/")
+PORTAINER_TOKEN = setting_get("portainer_token", PORTAINER_TOKEN)
+VAS_HOSTING_API_KEY = setting_get("vas_hosting_api_key", VAS_HOSTING_API_KEY)
+VAS_HOSTING_API_URL = setting_get("vas_hosting_api_url", VAS_HOSTING_API_URL).rstrip("/")
+headers = {"X-API-Key": PORTAINER_TOKEN}
 
 def client():
     return httpx.AsyncClient(base_url=PORTAINER_URL, headers=headers, verify=False, timeout=30)
@@ -325,7 +363,9 @@ async def vas_find_a_record(host):
 async def vas_update_a_record(zone, record_id, host, content, ttl=60):
     if not vas_hosting_enabled():
         raise RuntimeError("Váš Hosting DNS is not configured")
-    payload = {"name": host.rstrip("."), "content": content, "type": "A", "ttl": int(ttl or 60)}
+    fqdn = host.rstrip(".")
+    relative_name = fqdn[:-len(zone)-1] if fqdn.endswith("." + zone) else ("" if fqdn == zone else fqdn)
+    payload = {"name": relative_name or zone, "content": content, "type": "A", "ttl": int(ttl or 60)}
     async with httpx.AsyncClient(base_url=VAS_HOSTING_API_URL, headers={"X-API-Key": VAS_HOSTING_API_KEY, "Content-Type": "application/json"}, timeout=30) as c:
         r = await c.post("/domains/" + zone + "/dns-records/" + str(record_id), json=payload)
         if r.status_code not in (200, 201, 204):

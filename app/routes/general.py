@@ -2,7 +2,7 @@ from ..core import *
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "1.0.0"}
+    return {"status": "ok", "version": "1.1.0"}
 
 @app.get("/api/inventory")
 async def inventory():
@@ -92,7 +92,7 @@ async def preflight(stack_id: int, target_id: int):
             add("DNS cutover", True, "Chybí Public IP u zdrojového nebo cílového endpointu · DNS se při migraci nezmění", "warning")
     else: add("Proxy metadata", True, "Stack nemá dc1.proxy doménu", "warning")
     blocking = [c for c in checks if c["level"] == "error" and not c["ok"]]
-    return {"version": "1.0.0", "read_only": True, "ready": len(blocking) == 0, "stack": detail["stack"], "target": {"id": target["Id"], "name": target["Name"]}, "containers": len(detail["containers"]), "volumes": [v["name"] for v in detail["volumes"]], "checks": checks}
+    return {"version": "1.1.0", "read_only": True, "ready": len(blocking) == 0, "stack": detail["stack"], "target": {"id": target["Id"], "name": target["Name"]}, "containers": len(detail["containers"]), "volumes": [v["name"] for v in detail["volumes"]], "checks": checks}
 
 def endpoint_host_ip(endpoint):
     endpoint_id = int((endpoint or {}).get("Id") or 0); setting = get_endpoint_settings().get(endpoint_id, {})
