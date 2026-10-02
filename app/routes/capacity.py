@@ -1,6 +1,76 @@
 from ..core import *
 from .general import stack_detail
 
+
+CAPACITY_AGENT_IMAGE = os.getenv("CAPACITY_AGENT_IMAGE", "ghcr.io/drbanek/dockerstackmover-capacity-agent:latest")
+CAPACITY_AGENT_CONTAINER = "dockerstackmover-capacity-agent"
+
+async def _agent_container(endpoint_id):
+    r = await docker_request(endpoint_id, "GET", "/containers/" + CAPACITY_AGENT_CONTAINER + "/json")
+    return r.json() if r.status_code == 200 else None
+
+@app.post("/api/endpoints/{endpoint_id}/capacity-agent/install")
+async def install_capacity_agent(endpoint_id: int, session=Depends(require_csrf)):
+    if "admin" not in user_permissions(session.get("user", "")):
+        raise HTTPException(403, "Permission denied")
+    endpoints = await get_endpoints()
+    endpoint = next((e for e in endpoints if int(e.get("Id")) == endpoint_id), None)
+    if not endpoint:
+        raise HTTPException(404, "Endpoint not found")
+    settings = get_endpoint_settings().get(endpoint_id, {})
+    host_ip = (settings.get("host_ip") or "").strip()
+    if not host_ip:
+        raise HTTPException(400, "Nejdřív nastav Host IP endpointu")
+    token = secrets.token_hex(32)
+    # Pull the centrally published agent image through Portainer.
+    await ensure_image(endpoint_id, CAPACITY_AGENT_IMAGE)
+    existing = await _agent_container(endpoint_id)
+    if existing:
+        await remove_container(endpoint_id, CAPACITY_AGENT_CONTAINER)
+    create = await docker_request(endpoint_id, "POST", "/containers/create",
+        params={"name": CAPACITY_AGENT_CONTAINER},
+        json={
+            "Image": CAPACITY_AGENT_IMAGE,
+            "Env": ["AGENT_TOKEN=" + token],
+            "ExposedPorts": {"9100/tcp": {}},
+            "HostConfig": {
+                "Binds": ["/srv:/host/srv:ro", "/var/lib/docker:/host/docker:ro"],
+                "PortBindings": {"9100/tcp": [{"HostIp": host_ip, "HostPort": "9100"}]},
+                "ReadonlyRootfs": True,
+                "Tmpfs": {"/tmp": "rw,noexec,nosuid,size=16m"},
+                "SecurityOpt": ["no-new-privileges:true"],
+                "CapDrop": ["ALL"],
+                "RestartPolicy": {"Name": "unless-stopped", "MaximumRetryCount": 0}
+            }
+        })
+    if create.status_code != 201:
+        raise HTTPException(create.status_code, "Capacity Agent create failed: " + create.text)
+    container_id = create.json()["Id"]
+    start = await docker_request(endpoint_id, "POST", "/containers/" + container_id + "/start", json={})
+    if start.status_code not in (204, 304):
+        await remove_container(endpoint_id, container_id)
+        raise HTTPException(start.status_code, "Capacity Agent start failed: " + start.text)
+    agent_url = "http://" + host_ip + ":9100"
+    last_error = ""
+    for _ in range(15):
+        try:
+            async with httpx.AsyncClient(timeout=3) as hc:
+                health = await hc.get(agent_url + "/health")
+                capacity = await hc.get(agent_url + "/capacity", headers={"X-Agent-Token": token})
+            if health.status_code == 200 and capacity.status_code == 200:
+                payload = capacity.json()
+                if int((payload.get("data") or {}).get("total") or 0) > 0 and int((payload.get("system") or {}).get("total") or 0) > 0:
+                    save_endpoint_setting(endpoint_id, bool(settings.get("migration_enabled")), host_ip,
+                        settings.get("site", ""), settings.get("public_ip", ""), agent_url, token)
+                    return {"ok": True, "agent_url": agent_url, "image": CAPACITY_AGENT_IMAGE}
+            last_error = "health=" + str(health.status_code) + ", capacity=" + str(capacity.status_code)
+        except Exception as exc:
+            last_error = str(exc)
+        await asyncio.sleep(1)
+    await remove_container(endpoint_id, container_id)
+    raise HTTPException(502, "Capacity Agent se po instalaci nepodařilo ověřit: " + last_error)
+
+
 def fmt_bytes(value):
     value = float(value or 0); units = ["B", "KB", "MB", "GB", "TB"]
     for unit in units:
