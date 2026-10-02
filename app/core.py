@@ -112,12 +112,18 @@ def init_db():
                 host_ip TEXT,
                 site TEXT,
                 public_ip TEXT,
+                agent_url TEXT,
+                agent_token TEXT,
                 updated_at TEXT NOT NULL
             )
         """)
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(endpoint_settings)").fetchall()}
         if "public_ip" not in columns:
             conn.execute("ALTER TABLE endpoint_settings ADD COLUMN public_ip TEXT")
+        if "agent_url" not in columns:
+            conn.execute("ALTER TABLE endpoint_settings ADD COLUMN agent_url TEXT")
+        if "agent_token" not in columns:
+            conn.execute("ALTER TABLE endpoint_settings ADD COLUMN agent_token TEXT")
         conn.execute("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, secret INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)")
         conn.execute("CREATE TABLE IF NOT EXISTS app_users (username TEXT PRIMARY KEY, password_hash TEXT NOT NULL, updated_at TEXT NOT NULL)")
         user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(app_users)").fetchall()}
