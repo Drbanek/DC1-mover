@@ -31,7 +31,7 @@ async def node_capacity(endpoint):
 
 @app.get("/api/cluster")
 async def cluster_dashboard(session=Depends(current_session)):
-    endpoints = await get_endpoints(); nodes = [e for e in endpoints if str(e.get("Name", "")).startswith("DC1-NODE")]
+    endpoints = await get_endpoints(); nodes = migration_endpoints(endpoints)
     async with client() as c:
         stacks_r = await c.get("/api/stacks")
         if stacks_r.status_code != 200: raise HTTPException(stacks_r.status_code, "Portainer stacks: " + stacks_r.text)
@@ -49,7 +49,7 @@ async def cluster_dashboard(session=Depends(current_session)):
 
 @app.get("/api/nodes/capacity")
 async def nodes_capacity(session=Depends(current_session)):
-    endpoints = await get_endpoints(); nodes = [e for e in endpoints if str(e.get("Name", "")).startswith("DC1-NODE")]; result = []
+    endpoints = await get_endpoints(); nodes = migration_endpoints(endpoints); result = []
     for endpoint in nodes:
         try: result.append(await node_capacity(endpoint))
         except Exception as exc: result.append({"id": endpoint.get("Id"), "name": endpoint.get("Name"), "error": str(exc)})
@@ -59,7 +59,7 @@ async def nodes_capacity(session=Depends(current_session)):
 
 @app.get("/api/stacks/{stack_id}/advisor")
 async def migration_advisor(stack_id: int, session=Depends(current_session)):
-    detail = await stack_detail(stack_id); source_id = int(detail["stack"]["endpoint_id"]); endpoints = await get_endpoints(); nodes = [e for e in endpoints if str(e.get("Name", "")).startswith("DC1-NODE") and int(e.get("Id")) != source_id]
+    detail = await stack_detail(stack_id); source_id = int(detail["stack"]["endpoint_id"]); endpoints = await get_endpoints(); nodes = [e for e in migration_endpoints(endpoints) if int(e.get("Id")) != source_id]
     source_volume_bytes = 0
     for volume in detail.get("volumes", []):
         size = volume.get("size")
