@@ -37,3 +37,28 @@ input { width:100%; padding:11px 12px; border-radius:8px; border:1px solid #3341
 .formgrid label,.formrow label { color:#94a3b8; font-size:12px; } .formgrid input,.formgrid select,.formrow select { margin-top:6px; }
 button.danger { background:#991b1b; }
 @media(max-width:700px){.tabs{overflow:auto}.wrap{padding:22px 12px}table{font-size:13px}.formrow{align-items:stretch;flex-direction:column}}
+
+/* v1.1 responsive layout fixes */
+.wrap { max-width: 1440px; }
+.card { overflow: visible; }
+.card > .body { overflow-x: auto; }
+table { min-width: 760px; table-layout: auto; }
+td:last-child, th:last-child { width: 1%; white-space: nowrap; }
+td:last-child button { display: inline-block; margin: 2px 4px 2px 0 !important; vertical-align: middle; }
+#endpointSettings .item {
+  display: grid !important;
+  grid-template-columns: minmax(220px,1.35fr) minmax(170px,1fr) minmax(170px,1fr) minmax(150px,.9fr) minmax(150px,auto) !important;
+  align-items: center !important;
+}
+#endpointSettings .item label { display:flex; align-items:center; gap:8px; white-space:nowrap; min-width:0; }
+#endpointSettings .item label input[type="checkbox"] { width:18px; height:18px; flex:0 0 18px; }
+#endpointSettings .item input { min-width:0; }
+@media (max-width: 1100px) {
+  #endpointSettings .item { grid-template-columns: minmax(220px,1fr) minmax(160px,1fr) minmax(160px,1fr) !important; }
+  #endpointSettings .item label { grid-column: auto; }
+}
+@media (max-width: 760px) {
+  #endpointSettings .item { grid-template-columns:1fr !important; }
+  table { min-width:680px; }
+  .header { align-items:flex-start; flex-wrap:wrap; }
+}

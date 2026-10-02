@@ -209,8 +209,16 @@ VAS_HOSTING_API_KEY = setting_get("vas_hosting_api_key", VAS_HOSTING_API_KEY)
 VAS_HOSTING_API_URL = setting_get("vas_hosting_api_url", VAS_HOSTING_API_URL).rstrip("/")
 headers = {"X-API-Key": PORTAINER_TOKEN}
 
+def portainer_config():
+    url = setting_get("portainer_url", PORTAINER_URL).rstrip("/")
+    token = setting_get("portainer_token", PORTAINER_TOKEN)
+    if not url or not token:
+        raise HTTPException(503, "Portainer is not configured")
+    return url, token
+
 def client():
-    return httpx.AsyncClient(base_url=PORTAINER_URL, headers=headers, verify=False, timeout=30)
+    url, token = portainer_config()
+    return httpx.AsyncClient(base_url=url, headers={"X-API-Key": token}, verify=False, timeout=30)
 
 async def pget(path, params=None):
     async with client() as c:
@@ -321,8 +329,11 @@ async def build_detail(stack_id):
     return {"stack": {"id": stack["Id"], "name": stack["Name"], "endpoint_id": endpoint_id, "endpoint": endpoint_name, "status": stack["Status"]}, "containers": containers, "volumes": volumes, "domains": domains}
 
 
+def vas_config():
+    return setting_get("vas_hosting_api_url", VAS_HOSTING_API_URL).rstrip("/"), setting_get("vas_hosting_api_key", VAS_HOSTING_API_KEY)
+
 def vas_hosting_enabled():
-    return bool(VAS_HOSTING_API_KEY)
+    return bool(vas_config()[1])
 
 def split_dns_name(host):
     host = (host or "").strip().rstrip(".").lower()
@@ -335,7 +346,8 @@ def split_dns_name(host):
 async def vas_dns_records(zone):
     if not vas_hosting_enabled():
         raise RuntimeError("Váš Hosting DNS is not configured")
-    async with httpx.AsyncClient(base_url=VAS_HOSTING_API_URL, headers={"X-API-Key": VAS_HOSTING_API_KEY}, timeout=30) as c:
+    api_url, api_key = vas_config()
+    async with httpx.AsyncClient(base_url=api_url, headers={"X-API-Key": api_key}, timeout=30) as c:
         r = await c.get("/domains/" + zone + "/dns-records")
         if r.status_code != 200:
             raise RuntimeError("Váš Hosting DNS list failed for " + zone + ": HTTP " + str(r.status_code))
@@ -366,7 +378,8 @@ async def vas_update_a_record(zone, record_id, host, content, ttl=60):
     fqdn = host.rstrip(".")
     relative_name = fqdn[:-len(zone)-1] if fqdn.endswith("." + zone) else ("" if fqdn == zone else fqdn)
     payload = {"name": relative_name or zone, "content": content, "type": "A", "ttl": int(ttl or 60)}
-    async with httpx.AsyncClient(base_url=VAS_HOSTING_API_URL, headers={"X-API-Key": VAS_HOSTING_API_KEY, "Content-Type": "application/json"}, timeout=30) as c:
+    api_url, api_key = vas_config()
+    async with httpx.AsyncClient(base_url=api_url, headers={"X-API-Key": api_key, "Content-Type": "application/json"}, timeout=30) as c:
         r = await c.post("/domains/" + zone + "/dns-records/" + str(record_id), json=payload)
         if r.status_code not in (200, 201, 204):
             raise RuntimeError("Váš Hosting DNS update failed for " + host + ": HTTP " + str(r.status_code) + " " + r.text[:300])
