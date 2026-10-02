@@ -7,6 +7,32 @@ def fmt_bytes(value):
         if value < 1024 or unit == units[-1]: return f"{value:.1f} {unit}"
         value /= 1024
 
+async def host_disk_usage(endpoint_id, docker_root):
+    helper = None
+    try:
+        await ensure_image(endpoint_id, "busybox:1.37")
+        create = await docker_request(endpoint_id, "POST", "/containers/create", json={
+            "Image": "busybox:1.37",
+            "Cmd": ["sh", "-c", "df -B1 /dockerroot | tail -1"],
+            "HostConfig": {"Binds": [docker_root + ":/dockerroot:ro"], "NetworkMode": "none"}
+        })
+        if create.status_code != 201:
+            raise RuntimeError("disk helper create failed: " + create.text)
+        helper = create.json()["Id"]
+        start = await docker_request(endpoint_id, "POST", f"/containers/{helper}/start")
+        if start.status_code != 204:
+            raise RuntimeError("disk helper start failed: " + start.text)
+        await wait_container(endpoint_id, helper, timeout=30)
+        logs = await docker_request(endpoint_id, "GET", f"/containers/{helper}/logs?stdout=1&stderr=1")
+        line = logs.text.strip().splitlines()[-1].replace("\x01", "").replace("\x00", "").strip()
+        parts = line.split()
+        total, used, free = int(parts[-5]), int(parts[-4]), int(parts[-3])
+        pct = round((used / total * 100.0) if total else 0, 1)
+        return {"total": total, "used": used, "free": free, "percent": pct}
+    finally:
+        if helper:
+            await remove_container(endpoint_id, helper)
+
 async def node_capacity(endpoint):
     endpoint_id = endpoint["Id"]; info_r = await docker_request(endpoint_id, "GET", "/info")
     if info_r.status_code != 200: raise RuntimeError("Docker info failed for " + endpoint["Name"] + ": " + info_r.text)
@@ -27,7 +53,13 @@ async def node_capacity(endpoint):
         usage = volume.get("UsageData") or {}; size = usage.get("Size")
         if isinstance(size, int) and size > 0: volumes_size += size
     docker_used = images_size + volumes_size
-    return {"id": endpoint_id, "name": endpoint["Name"], "cpu_count": cpus, "ram_total": total_ram, "ram_used_containers": used_ram, "ram_available_estimate": available_ram, "running_containers": running, "cpu_percent_containers": round(cpu_percent_total, 1), "docker_images_size": images_size, "docker_volumes_size": volumes_size, "docker_used_estimate": docker_used, "ram_total_human": fmt_bytes(total_ram), "ram_used_human": fmt_bytes(used_ram), "ram_available_human": fmt_bytes(available_ram), "docker_used_human": fmt_bytes(docker_used)}
+    docker_root = str(info.get("DockerRootDir") or "/var/lib/docker")
+    disk = None
+    try:
+        disk = await host_disk_usage(endpoint_id, docker_root)
+    except Exception:
+        disk = None
+    return {"id": endpoint_id, "name": endpoint["Name"], "cpu_count": cpus, "ram_total": total_ram, "ram_used_containers": used_ram, "ram_available_estimate": available_ram, "running_containers": running, "cpu_percent_containers": round(cpu_percent_total, 1), "docker_images_size": images_size, "docker_volumes_size": volumes_size, "docker_used_estimate": docker_used, "ram_total_human": fmt_bytes(total_ram), "ram_used_human": fmt_bytes(used_ram), "ram_available_human": fmt_bytes(available_ram), "docker_used_human": fmt_bytes(docker_used), "docker_root": docker_root, "disk_total": disk["total"] if disk else None, "disk_used": disk["used"] if disk else None, "disk_free": disk["free"] if disk else None, "disk_percent": disk["percent"] if disk else None, "disk_total_human": fmt_bytes(disk["total"]) if disk else None, "disk_used_human": fmt_bytes(disk["used"]) if disk else None, "disk_free_human": fmt_bytes(disk["free"]) if disk else None}
 
 @app.get("/api/cluster")
 async def cluster_dashboard(session=Depends(current_session)):
