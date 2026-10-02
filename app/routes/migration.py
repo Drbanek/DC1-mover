@@ -1,0 +1,88 @@
+from ..core import *
+from .general import *
+
+async def migration_worker(job):
+    stack_id = job["stack_id"]; target_id = job["target_id"]; source_stopped = False; created_volumes = []
+    try:
+        job["status"] = "running"; persist_job(job); job_step(job, "Příprava", "running", "Načítám zdroj a cíl")
+        detail = await build_detail(stack_id); endpoints = await get_endpoints(); stacks = await get_stacks(); source_id = detail["stack"]["endpoint_id"]
+        target = next((e for e in endpoints if e["Id"] == target_id), None); source_endpoint = next((e for e in endpoints if e["Id"] == source_id), None); source_stack = next((s for s in stacks if s["Id"] == stack_id), None)
+        if not target or not source_endpoint or not source_stack: raise RuntimeError("Source stack or target endpoint not found")
+        if source_id == target_id: raise RuntimeError("Source and target are identical")
+        if not target.get("Name", "").startswith("DC1-NODE"): raise RuntimeError("Target is not a DC1-NODE endpoint")
+        job_step(job, "Příprava", "ok", detail["stack"]["endpoint"] + " → " + target["Name"]); job_step(job, "Kontrola kolizí", "running", "Opakuji bezpečnostní kontroly před změnou")
+        if any(s.get("EndpointId") == target_id and s.get("Name") == detail["stack"]["name"] for s in stacks): raise RuntimeError("Target stack already exists")
+        for volume in detail["volumes"]:
+            r = await docker_request(target_id, "GET", "/volumes/" + volume["name"])
+            if r.status_code == 200: raise RuntimeError("Target volume already exists: " + volume["name"])
+            if r.status_code != 404: raise RuntimeError("Cannot inspect target volume " + volume["name"] + ": " + r.text)
+        target_containers = (await docker_get(target_id, "/containers/json", params={"all": "1"})).json()
+        used_ports = {(int(p["PublicPort"]), p.get("Type", "tcp")) for c in target_containers for p in c.get("Ports", []) if p.get("PublicPort")}
+        wanted_ports = {(int(p["public"]), p.get("type", "tcp")) for c in detail["containers"] for p in c["ports"] if p.get("public")}
+        collision = wanted_ports.intersection(used_ports)
+        if collision: raise RuntimeError("Target port collision: " + str(sorted(collision)))
+        stack_file = await get_stack_file(stack_id)
+        if not stack_file.strip(): raise RuntimeError("Empty stack definition")
+        stack_file, source_host_ip, target_host_ip, rewritten_ports = rewrite_host_bind_ip(stack_file, source_endpoint, target); env = source_stack.get("Env") or []
+        collision_message = "Cíl je volný"
+        if rewritten_ports: collision_message += " · host bind IP: " + source_host_ip + " → " + target_host_ip + " (" + str(rewritten_ports) + "×)"
+        job_step(job, "Kontrola kolizí", "ok", collision_message); job_step(job, "Zastavení zdroje", "running", "Zastavuji stack pro konzistentní kopii dat")
+        await stop_stack(stack_id, source_id); source_stopped = True; await asyncio.sleep(3); job_step(job, "Zastavení zdroje", "ok", "Zdrojový stack je zastaven")
+        for volume in detail["volumes"]:
+            step_name = "Volume: " + volume["name"]; job_step(job, step_name, "running", "Vytvářím volume na cíli")
+            await create_volume(target_id, volume["name"], volume.get("driver") or "local"); created_volumes.append(volume["name"]); job_step(job, step_name, "running", "Kopíruji obsah přes Docker archive API")
+            await copy_volume(source_id, target_id, volume["name"]); job_step(job, step_name, "ok", "Data přenesena")
+        job_step(job, "Vytvoření stacku", "running", "Vytvářím stack na " + target["Name"]); created = await create_target_stack(target_id, detail["stack"]["name"], stack_file, env); target_stack_id = created.get("Id")
+        job_step(job, "Vytvoření stacku", "ok", "Portainer stack ID: " + str(target_stack_id)); job_step(job, "Ověření cíle", "running", "Čekám na spuštění a healthcheck cílových kontejnerů · timeout 120 s")
+        deadline = asyncio.get_running_loop().time() + 120; migrated = []; last_state = "Kontejnery zatím nejsou vytvořené"
+        while asyncio.get_running_loop().time() < deadline:
+            r = await docker_get(target_id, "/containers/json", params={"all": "1"}); migrated = [c for c in r.json() if (c.get("Labels") or {}).get("com.docker.compose.project") == detail["stack"]["name"]]
+            if not migrated:
+                last_state = "Kontejnery zatím nejsou vytvořené"; job_step(job, "Ověření cíle", "running", last_state); await asyncio.sleep(3); continue
+            waiting = []; fatal = []
+            for container in migrated:
+                name = container.get("Names", ["unknown"])[0].lstrip("/"); state = container.get("State"); status = container.get("Status") or ""
+                if state in ("dead", "removing"): fatal.append(name + " (" + state + ")"); continue
+                if state == "exited": fatal.append(name + " (" + status + ")"); continue
+                if state != "running": waiting.append(name + " (" + str(state) + ")"); continue
+                status_lower = status.lower()
+                if "health: starting" in status_lower: waiting.append(name + " (health: starting)")
+                elif "unhealthy" in status_lower: fatal.append(name + " (unhealthy)")
+            if fatal: raise RuntimeError("Target container failure: " + ", ".join(fatal))
+            if not waiting:
+                job_step(job, "Ověření cíle", "ok", str(len(migrated)) + " kontejner(y) běží a healthcheck je v pořádku"); break
+            last_state = "Čekám: " + ", ".join(waiting); job_step(job, "Ověření cíle", "running", last_state); await asyncio.sleep(3)
+        else: raise RuntimeError("Target health timeout after 120 s: " + last_state)
+        job["status"] = "success"; job["result"] = {"stack": detail["stack"]["name"], "source": detail["stack"]["endpoint"], "source_endpoint_id": source_id, "source_stack_id": stack_id, "target": target["Name"], "target_endpoint_id": target_id, "target_stack_id": target_stack_id, "volumes": created_volumes, "source_volumes": [v["name"] for v in detail["volumes"]], "source_state": "stopped-retained"}; persist_job(job)
+    except Exception as exc:
+        job["status"] = "rollback"; job["error"] = str(exc); persist_job(job)
+        for step in reversed(job["steps"]):
+            if step["state"] == "running": step["state"] = "error"; step["message"] = str(exc); break
+        if source_stopped:
+            job_step(job, "Rollback zdroje", "running", "Migrace selhala, vracím zdroj do provozu")
+            try:
+                await start_stack(stack_id, source_id); await asyncio.sleep(5); job_step(job, "Rollback zdroje", "ok", "Zdrojový stack byl znovu spuštěn")
+            except Exception as rollback_exc: job_step(job, "Rollback zdroje", "error", "Rollback selhal: " + str(rollback_exc))
+        job["status"] = "failed"; persist_job(job); release_stack_lock(job["stack_id"], job["id"])
+
+@app.post("/api/stacks/{stack_id}/migrate/{target_id}")
+async def migrate(stack_id: int, target_id: int):
+    active = next((j for j in load_recent_jobs(100) if j["stack_id"] == stack_id and j["status"] in ("queued", "running", "rollback")), None)
+    if active: return {"job_id": active["id"], "status": active["status"]}
+    job = new_job(stack_id, target_id); asyncio.create_task(migration_worker(job)); return {"job_id": job["id"], "status": job["status"]}
+
+@app.post("/api/login")
+async def login(request: Request):
+    payload = await request.json(); user = str(payload.get("username", "")); password = str(payload.get("password", ""))
+    if not hmac.compare_digest(user, MOVER_USER) or not password_ok(password): raise HTTPException(401, "Invalid credentials")
+    token, csrf = new_session(); response = Response(content=json.dumps({"ok": True, "csrf": csrf}), media_type="application/json")
+    response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="strict", secure=False, max_age=28800); return response
+
+@app.post("/api/logout")
+async def logout(request: Request):
+    token = request.cookies.get(SESSION_COOKIE)
+    if token: sessions.pop(token, None)
+    response = Response(content=json.dumps({"ok": True}), media_type="application/json"); response.delete_cookie(SESSION_COOKIE); return response
+
+@app.get("/api/session")
+async def session_info(session=Depends(current_session)): return {"authenticated": True, "user": session["user"], "csrf": session["csrf"]}
