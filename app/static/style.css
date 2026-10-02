@@ -88,3 +88,11 @@ td:last-child button { display: inline-block; margin: 2px 4px 2px 0 !important; 
   padding: 0 14px;
   line-height: 58px;
 }
+
+.capacityDisk { margin-top:12px; }
+.capacityDiskHead { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-bottom:7px; }
+.capacityBar { height:10px; width:100%; overflow:hidden; border-radius:999px; background:#1e293b; margin-bottom:7px; }
+.capacityBarFill { height:100%; border-radius:999px; transition:width .25s ease; }
+.capacityBarFill.ok { background:#059669; }
+.capacityBarFill.warning { background:#d97706; }
+.capacityBarFill.danger { background:#dc2626; }
