@@ -84,7 +84,7 @@ async def migration_worker(job):
         job["status"] = "failed"; persist_job(job); release_stack_lock(job["stack_id"], job["id"])
 
 @app.post("/api/stacks/{stack_id}/migrate/{target_id}")
-async def migrate(stack_id: int, target_id: int):
+async def migrate(stack_id: int, target_id: int, session=Depends(require_csrf)):
     active = next((j for j in load_recent_jobs(100) if j["stack_id"] == stack_id and j["status"] in ("queued", "running", "rollback")), None)
     if active: return {"job_id": active["id"], "status": active["status"]}
     job = new_job(stack_id, target_id); asyncio.create_task(migration_worker(job)); return {"job_id": job["id"], "status": job["status"]}
