@@ -1,6 +1,6 @@
 services:
   mover:
-    image: ghcr.io/drbanek/dc1-mover:latest
+    image: ghcr.io/drbanek/dockerstackmover:latest
     pull_policy: always
     restart: unless-stopped
     environment:
