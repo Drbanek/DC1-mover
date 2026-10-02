@@ -9,7 +9,7 @@ async def migration_worker(job):
         target = next((e for e in endpoints if e["Id"] == target_id), None); source_endpoint = next((e for e in endpoints if e["Id"] == source_id), None); source_stack = next((s for s in stacks if s["Id"] == stack_id), None)
         if not target or not source_endpoint or not source_stack: raise RuntimeError("Source stack or target endpoint not found")
         if source_id == target_id: raise RuntimeError("Source and target are identical")
-        if not target.get("Name", "").startswith("DC1-NODE"): raise RuntimeError("Target is not a DC1-NODE endpoint")
+        if int(target_id) not in {int(e["Id"]) for e in migration_endpoints(endpoints)}: raise RuntimeError("Target endpoint is not enabled for migrations")
         job_step(job, "Příprava", "ok", detail["stack"]["endpoint"] + " → " + target["Name"]); job_step(job, "Kontrola kolizí", "running", "Opakuji bezpečnostní kontroly před změnou")
         if any(s.get("EndpointId") == target_id and s.get("Name") == detail["stack"]["name"] for s in stacks): raise RuntimeError("Target stack already exists")
         for volume in detail["volumes"]:
