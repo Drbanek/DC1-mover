@@ -1,8 +1,8 @@
-# Portainer Stack Mover
+# DockerStackMover
 
 **Čeština** | [English](README.en.md)
 
-Portainer Stack Mover je lehký nástroj pro bezpečnou migraci samostatných Docker Compose stacků mezi endpointy v Portaineru. Přenáší named volumes, provádí kontroly před migrací a umožňuje návrat zpět pomocí rollbacku.
+DockerStackMover je lehký nástroj pro bezpečnou migraci samostatných Docker Compose stacků mezi endpointy v Portaineru. Přenáší named volumes, provádí kontroly před migrací a umožňuje návrat zpět pomocí rollbacku.
 
 ## Funkce
 
@@ -50,8 +50,8 @@ app/
 ## Instalace
 
 ```bash
-git clone https://github.com/Drbanek/DC1-mover.git
-cd DC1-mover
+git clone https://github.com/Drbanek/DockerStackMover.git
+cd DockerStackMover
 cp .env.example .env
 ```
 
