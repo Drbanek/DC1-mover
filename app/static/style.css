@@ -96,3 +96,50 @@ td:last-child button { display: inline-block; margin: 2px 4px 2px 0 !important; 
 .capacityBarFill.ok { background:#059669; }
 .capacityBarFill.warning { background:#d97706; }
 .capacityBarFill.danger { background:#dc2626; }
+
+/* DNS action column must always remain visible inside the card. */
+#dnsRecords .dns-name { width:25%; }
+#dnsRecords .dns-type { width:8%; }
+#dnsRecords .dns-value { width:auto; }
+#dnsRecords .dns-ttl { width:7%; }
+#dnsRecords .dns-actions {
+  width:190px !important;
+  min-width:190px !important;
+  white-space:nowrap !important;
+  text-align:right;
+}
+#dnsRecords th:last-child {
+  width:190px !important;
+  min-width:190px !important;
+  white-space:nowrap;
+  text-align:right;
+}
+#dnsRecords .dns-actions button {
+  display:inline-flex !important;
+  visibility:visible !important;
+  align-items:center;
+  justify-content:center;
+  margin:2px 0 2px 6px !important;
+}
+@media(max-width:900px){
+  #dnsRecords .dns-actions,
+  #dnsRecords th:last-child { width:110px !important; min-width:110px !important; }
+  #dnsRecords .dns-actions { white-space:normal !important; }
+  #dnsRecords .dns-actions button { width:100%; margin:3px 0 !important; }
+}
+
+/* DNS editor: native select must match the normal input height exactly. */
+#dnsEditor .formgrid { align-items:end; }
+#dnsEditor .formgrid label { display:flex; flex-direction:column; }
+#dnsEditor input,
+#dnsEditor select {
+  box-sizing:border-box;
+  width:100%;
+  height:58px !important;
+  min-height:58px !important;
+  max-height:58px !important;
+  margin-top:6px;
+  padding:0 14px !important;
+  line-height:normal !important;
+}
+#dnsEditor select { appearance:auto; -webkit-appearance:menulist; }
