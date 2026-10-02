@@ -1,0 +1,24 @@
+services:
+  mover:
+    build: .
+    container_name: dc1-mover
+    restart: unless-stopped
+    environment:
+      PORTAINER_URL: "${PORTAINER_URL}"
+      PORTAINER_TOKEN: "${PORTAINER_TOKEN}"
+      MOVER_USER: "${MOVER_USER:-admin}"
+      MOVER_PASSWORD: "${MOVER_PASSWORD}"
+      MOVER_SESSION_SECRET: "${MOVER_SESSION_SECRET}"
+    ports:
+      - "${MOVER_BIND_IP:-127.0.0.1}:${MOVER_PORT:-8081}:8080"
+    volumes:
+      - mover-data:/data
+    networks:
+      - mover
+
+volumes:
+  mover-data:
+
+networks:
+  mover:
+    driver: bridge
