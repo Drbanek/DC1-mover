@@ -111,6 +111,10 @@ async def rollback_migration(job_id: str, session=Depends(require_csrf)):
     if not job or job.get("status") != "success" or not job.get("result"): raise HTTPException(409, "Migration is not ready for rollback")
     result = job["result"]
     if result.get("finalized"): return result
+    await start_stack(result["source_stack_id"], result["source_endpoint_id"])
+    for change in reversed(result.get("dns_changes", [])):
+        if change.get("provider") == "vas-hosting":
+            await vas_update_a_record(change["zone"], change["record_id"], change["host"], change["old_content"], change.get("ttl") or 60)
     await delete_stack(result["target_stack_id"], result["target_endpoint_id"])
     for volume_name in result.get("volumes", []): await delete_volume(result["target_endpoint_id"], volume_name)
-    await start_stack(result["source_stack_id"], result["source_endpoint_id"]); result["source_state"] = "running"; result["finalized"] = "rolled-back"; persist_job(job); release_stack_lock(job["stack_id"], job["id"]); return result
+    result["source_state"] = "running"; result["finalized"] = "rolled-back"; persist_job(job); release_stack_lock(job["stack_id"], job["id"]); return result

@@ -18,6 +18,9 @@ PORTAINER_URL = os.environ["PORTAINER_URL"].rstrip("/")
 PORTAINER_TOKEN = os.environ["PORTAINER_TOKEN"]
 headers = {"X-API-Key": PORTAINER_TOKEN}
 
+VAS_HOSTING_API_KEY = os.getenv("VAS_HOSTING_API_KEY", "").strip()
+VAS_HOSTING_API_URL = os.getenv("VAS_HOSTING_API_URL", "https://portal.vas-hosting.cz/api/v1").rstrip("/")
+
 DB_PATH = "/data/mover.db"
 MOVER_USER = os.getenv("MOVER_USER", "admin")
 MOVER_PASSWORD = os.getenv("MOVER_PASSWORD", "")
@@ -91,23 +94,27 @@ def init_db():
                 migration_enabled INTEGER NOT NULL DEFAULT 0,
                 host_ip TEXT,
                 site TEXT,
+                public_ip TEXT,
                 updated_at TEXT NOT NULL
             )
         """)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(endpoint_settings)").fetchall()}
+        if "public_ip" not in columns:
+            conn.execute("ALTER TABLE endpoint_settings ADD COLUMN public_ip TEXT")
 
 def get_endpoint_settings():
     with db() as conn:
         rows = conn.execute("SELECT * FROM endpoint_settings").fetchall()
-    return {int(r["endpoint_id"]): {"migration_enabled": bool(r["migration_enabled"]), "host_ip": r["host_ip"] or "", "site": r["site"] or ""} for r in rows}
+    return {int(r["endpoint_id"]): {"migration_enabled": bool(r["migration_enabled"]), "host_ip": r["host_ip"] or "", "site": r["site"] or "", "public_ip": r["public_ip"] or ""} for r in rows}
 
-def save_endpoint_setting(endpoint_id, migration_enabled, host_ip="", site=""):
+def save_endpoint_setting(endpoint_id, migration_enabled, host_ip="", site="", public_ip=""):
     with db() as conn:
         conn.execute("""
-            INSERT INTO endpoint_settings(endpoint_id, migration_enabled, host_ip, site, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO endpoint_settings(endpoint_id, migration_enabled, host_ip, site, public_ip, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(endpoint_id) DO UPDATE SET migration_enabled=excluded.migration_enabled,
-            host_ip=excluded.host_ip, site=excluded.site, updated_at=excluded.updated_at
-        """, (int(endpoint_id), 1 if migration_enabled else 0, (host_ip or "").strip(), (site or "").strip(), utcnow()))
+            host_ip=excluded.host_ip, site=excluded.site, public_ip=excluded.public_ip, updated_at=excluded.updated_at
+        """, (int(endpoint_id), 1 if migration_enabled else 0, (host_ip or "").strip(), (site or "").strip(), (public_ip or "").strip(), utcnow()))
 
 def migration_endpoints(endpoints):
     settings = get_endpoint_settings()
@@ -274,3 +281,56 @@ async def build_detail(stack_id):
         if labels.get("dc1.proxy.enable") == "true": domains.append({"host": labels.get("dc1.proxy.host"), "port": labels.get("dc1.proxy.port"), "scheme": labels.get("dc1.proxy.scheme", "http")})
     endpoint_name = endpoint["Name"] if endpoint else "Endpoint " + str(endpoint_id)
     return {"stack": {"id": stack["Id"], "name": stack["Name"], "endpoint_id": endpoint_id, "endpoint": endpoint_name, "status": stack["Status"]}, "containers": containers, "volumes": volumes, "domains": domains}
+
+
+def vas_hosting_enabled():
+    return bool(VAS_HOSTING_API_KEY)
+
+def split_dns_name(host):
+    host = (host or "").strip().rstrip(".").lower()
+    if not host or "." not in host:
+        raise RuntimeError("Invalid DNS host: " + host)
+    labels = host.split(".")
+    # Try longest managed zone first via the provider API.
+    return host, [".".join(labels[i:]) for i in range(1, len(labels) - 1)] + [".".join(labels[-2:])]
+
+async def vas_dns_records(zone):
+    if not vas_hosting_enabled():
+        raise RuntimeError("Váš Hosting DNS is not configured")
+    async with httpx.AsyncClient(base_url=VAS_HOSTING_API_URL, headers={"X-API-Key": VAS_HOSTING_API_KEY}, timeout=30) as c:
+        r = await c.get("/domains/" + zone + "/dns-records")
+        if r.status_code != 200:
+            raise RuntimeError("Váš Hosting DNS list failed for " + zone + ": HTTP " + str(r.status_code))
+        data = r.json()
+        return [{"id": str(record_id), **record} for record_id, record in data.items()]
+
+async def vas_find_a_record(host):
+    fqdn, zones = split_dns_name(host)
+    last_error = None
+    for zone in zones:
+        try:
+            records = await vas_dns_records(zone)
+        except Exception as exc:
+            last_error = exc
+            continue
+        matches = [r for r in records if (r.get("name") or "").rstrip(".").lower() == fqdn and r.get("type") == "A"]
+        if len(matches) > 1:
+            raise RuntimeError("Multiple A records found for " + fqdn + "; automatic DNS cutover is ambiguous")
+        if matches:
+            return zone, matches[0]
+    if last_error:
+        raise RuntimeError("DNS zone/record not found for " + fqdn + ": " + str(last_error))
+    raise RuntimeError("A record not found for " + fqdn)
+
+async def vas_update_a_record(zone, record_id, host, content, ttl=60):
+    if not vas_hosting_enabled():
+        raise RuntimeError("Váš Hosting DNS is not configured")
+    payload = {"name": host.rstrip("."), "content": content, "type": "A", "ttl": int(ttl or 60)}
+    async with httpx.AsyncClient(base_url=VAS_HOSTING_API_URL, headers={"X-API-Key": VAS_HOSTING_API_KEY, "Content-Type": "application/json"}, timeout=30) as c:
+        r = await c.post("/domains/" + zone + "/dns-records/" + str(record_id), json=payload)
+        if r.status_code not in (200, 201, 204):
+            raise RuntimeError("Váš Hosting DNS update failed for " + host + ": HTTP " + str(r.status_code) + " " + r.text[:300])
+    _, verified = await vas_find_a_record(host)
+    if verified.get("content") != content:
+        raise RuntimeError("DNS update verification failed for " + host + ": expected " + content + ", got " + str(verified.get("content")))
+    return verified

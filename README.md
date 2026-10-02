@@ -10,6 +10,8 @@ DockerStackMover je lehký nástroj pro bezpečnou migraci samostatných Docker 
 - libovolné názvy endpointů bez závislosti na pojmenování NODE/DC
 - explicitní výběr endpointů povolených pro migrace
 - volitelná Host IP pro Agent/Edge/non-TCP endpointy
+- volitelná Public IP endpointu pro cross-site DNS cutover
+- integrace Váš Hosting DNS: pre-flight kontrola, automatický A-record cutover po healthchecku a obnova DNS při rollbacku
 - přehled clusteru a kapacity endpointů
 - doporučení cílového endpointu podle kapacity
 - pre-flight kontrola kolizí stacků, volumes a portů
@@ -55,7 +57,7 @@ cd DockerStackMover
 cp .env.example .env
 ```
 
-Upravte `.env`, zejména `PORTAINER_URL`, `PORTAINER_TOKEN`, `MOVER_PASSWORD` a `MOVER_SESSION_SECRET`.
+Upravte `.env`, zejména `PORTAINER_URL`, `PORTAINER_TOKEN`, `MOVER_PASSWORD` a `MOVER_SESSION_SECRET`. Pro volitelnou integraci Váš Hosting nastavte také `VAS_HOSTING_API_KEY`; API klíč nikdy neukládejte do repozitáře.
 
 ```bash
 docker compose up -d --build
@@ -69,7 +71,7 @@ Podrobný český návod pro build, GHCR, Portainer a migrace je v [docs/KOMPILA
 
 Po přihlášení povolte pouze Docker endpointy, které mají být součástí migračního poolu. Názvy endpointů jsou pouze informativní a mohou být libovolné.
 
-U běžného `tcp://host:port` endpointu Mover zjistí Host IP automaticky. U Portainer Agent, Edge, DNS nebo jiného typu lze Host IP zadat ručně.
+U běžného `tcp://host:port` endpointu Mover zjistí Host IP automaticky. U Portainer Agent, Edge, DNS nebo jiného typu lze Host IP zadat ručně. Pro migrace mezi lokalitami lze každému endpointu nastavit také `Public IP`, na kterou se má po úspěšném healthchecku přepnout DNS.
 
 ## Průběh migrace
 
@@ -79,7 +81,7 @@ Mover zastaví zdrojový stack, přenese named volumes, vytvoří stack na cíli
 
 Endpointy nemusí být ve stejné LAN. Mohou být propojené privátní sítí/VPN nebo vhodně zabezpečeným veřejným spojením. Pro nezávislé lokality je vhodné mít v každé lokalitě vlastní reverse proxy.
 
-Verze 1.0.0 automaticky nemění veřejné DNS. DNS integrace pro cross-site migrace je plánována jako další rozšíření.
+Pokud je nastaven `VAS_HOSTING_API_KEY` a zdrojový i cílový endpoint mají vyplněnou rozdílnou `Public IP`, Mover před migrací ověří aktuální A záznam proxy domény. Po úspěšném healthchecku cíle přepne A záznam přes Váš Hosting API. Při rollbacku obnoví původní hodnotu DNS. Pokud DNS integrace nebo Public IP nejsou nastavené, migrace pokračuje bez změny DNS.
 
 ## Bezpečnost
 

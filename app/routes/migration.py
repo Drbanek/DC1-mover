@@ -2,7 +2,7 @@ from ..core import *
 from .general import *
 
 async def migration_worker(job):
-    stack_id = job["stack_id"]; target_id = job["target_id"]; source_stopped = False; created_volumes = []
+    stack_id = job["stack_id"]; target_id = job["target_id"]; source_stopped = False; created_volumes = []; dns_changes = []
     try:
         job["status"] = "running"; persist_job(job); job_step(job, "Příprava", "running", "Načítám zdroj a cíl")
         detail = await build_detail(stack_id); endpoints = await get_endpoints(); stacks = await get_stacks(); source_id = detail["stack"]["endpoint_id"]
@@ -53,7 +53,22 @@ async def migration_worker(job):
                 job_step(job, "Ověření cíle", "ok", str(len(migrated)) + " kontejner(y) běží a healthcheck je v pořádku"); break
             last_state = "Čekám: " + ", ".join(waiting); job_step(job, "Ověření cíle", "running", last_state); await asyncio.sleep(3)
         else: raise RuntimeError("Target health timeout after 120 s: " + last_state)
-        job["status"] = "success"; job["result"] = {"stack": detail["stack"]["name"], "source": detail["stack"]["endpoint"], "source_endpoint_id": source_id, "source_stack_id": stack_id, "target": target["Name"], "target_endpoint_id": target_id, "target_stack_id": target_stack_id, "volumes": created_volumes, "source_volumes": [v["name"] for v in detail["volumes"]], "source_state": "stopped-retained"}; persist_job(job)
+        settings = get_endpoint_settings(); source_public_ip = settings.get(int(source_id), {}).get("public_ip", ""); target_public_ip = settings.get(int(target_id), {}).get("public_ip", "")
+        if detail["domains"] and vas_hosting_enabled() and source_public_ip and target_public_ip and source_public_ip != target_public_ip:
+            job_step(job, "DNS cutover", "running", "Přepínám A záznamy " + source_public_ip + " → " + target_public_ip)
+            for domain in detail["domains"]:
+                host = domain.get("host")
+                if not host: continue
+                zone, record = await vas_find_a_record(host)
+                if record.get("content") != source_public_ip:
+                    raise RuntimeError("DNS safety check failed for " + host + ": current A record is " + str(record.get("content")) + ", expected " + source_public_ip)
+                change = {"provider": "vas-hosting", "zone": zone, "record_id": record["id"], "host": host, "type": "A", "old_content": record.get("content"), "new_content": target_public_ip, "ttl": int(record.get("ttl") or 60)}
+                await vas_update_a_record(zone, record["id"], host, target_public_ip, change["ttl"]); dns_changes.append(change)
+            job_step(job, "DNS cutover", "ok", str(len(dns_changes)) + " A záznam(y) přepnuty na " + target_public_ip)
+        elif detail["domains"]:
+            reason = "stejná veřejná IP" if source_public_ip and source_public_ip == target_public_ip else "DNS provider/Public IP není nakonfigurován"
+            job_step(job, "DNS cutover", "ok", "Beze změny · " + reason)
+        job["status"] = "success"; job["result"] = {"stack": detail["stack"]["name"], "source": detail["stack"]["endpoint"], "source_endpoint_id": source_id, "source_stack_id": stack_id, "target": target["Name"], "target_endpoint_id": target_id, "target_stack_id": target_stack_id, "volumes": created_volumes, "source_volumes": [v["name"] for v in detail["volumes"]], "source_state": "stopped-retained", "dns_changes": dns_changes}; persist_job(job)
     except Exception as exc:
         job["status"] = "rollback"; job["error"] = str(exc); persist_job(job)
         for step in reversed(job["steps"]):
@@ -61,7 +76,10 @@ async def migration_worker(job):
         if source_stopped:
             job_step(job, "Rollback zdroje", "running", "Migrace selhala, vracím zdroj do provozu")
             try:
-                await start_stack(stack_id, source_id); await asyncio.sleep(5); job_step(job, "Rollback zdroje", "ok", "Zdrojový stack byl znovu spuštěn")
+                await start_stack(stack_id, source_id); await asyncio.sleep(5)
+                for change in reversed(dns_changes):
+                    await vas_update_a_record(change["zone"], change["record_id"], change["host"], change["old_content"], change["ttl"])
+                job_step(job, "Rollback zdroje", "ok", "Zdrojový stack byl znovu spuštěn" + (" a DNS vráceno" if dns_changes else ""))
             except Exception as rollback_exc: job_step(job, "Rollback zdroje", "error", "Rollback selhal: " + str(rollback_exc))
         job["status"] = "failed"; persist_job(job); release_stack_lock(job["stack_id"], job["id"])
 

@@ -17,14 +17,14 @@ async def endpoint_settings_list(session=Depends(current_session)):
     endpoints = await get_endpoints(); settings = get_endpoint_settings(); result = []
     for endpoint in endpoints:
         eid = int(endpoint["Id"]); setting = settings.get(eid, {})
-        result.append({"id": eid, "name": endpoint.get("Name") or ("Endpoint " + str(eid)), "url": endpoint.get("URL") or "", "migration_enabled": bool(setting.get("migration_enabled", False)), "host_ip": setting.get("host_ip", ""), "site": setting.get("site", "")})
+        result.append({"id": eid, "name": endpoint.get("Name") or ("Endpoint " + str(eid)), "url": endpoint.get("URL") or "", "migration_enabled": bool(setting.get("migration_enabled", False)), "host_ip": setting.get("host_ip", ""), "site": setting.get("site", ""), "public_ip": setting.get("public_ip", "")})
     return result
 
 @app.put("/api/endpoints/{endpoint_id}/settings")
 async def endpoint_settings_save(endpoint_id: int, request: Request, session=Depends(require_csrf)):
     endpoints = await get_endpoints()
     if not any(int(e["Id"]) == endpoint_id for e in endpoints): raise HTTPException(404, "Endpoint not found")
-    payload = await request.json(); save_endpoint_setting(endpoint_id, bool(payload.get("migration_enabled")), str(payload.get("host_ip") or ""), str(payload.get("site") or ""))
+    payload = await request.json(); save_endpoint_setting(endpoint_id, bool(payload.get("migration_enabled")), str(payload.get("host_ip") or ""), str(payload.get("site") or ""), str(payload.get("public_ip") or ""))
     return {"ok": True}
 
 @app.get("/api/stacks/{stack_id}/targets")
@@ -69,7 +69,27 @@ async def preflight(stack_id: int, target_id: int):
     add("Persistentní data", len(unknown) == 0, str(len(detail["volumes"])) + " named volume(s) připraveno k migraci" if not unknown else "Nelze ověřit: " + ", ".join(unknown))
     not_running = [c["name"] for c in detail["containers"] if c.get("state") != "running"]
     add("Stav zdroje", len(not_running) == 0, "Všechny kontejnery zdrojového stacku běží" if not not_running else "Neběží: " + ", ".join(not_running), "ok" if not not_running else "warning")
-    if detail["domains"]: add("Proxy metadata", True, ", ".join((d.get("host") or "?") + " → " + str(d.get("port") or "?") for d in detail["domains"]))
+    if detail["domains"]:
+        add("Proxy metadata", True, ", ".join((d.get("host") or "?") + " → " + str(d.get("port") or "?") for d in detail["domains"]))
+        settings = get_endpoint_settings(); source_public_ip = settings.get(int(source_id), {}).get("public_ip", ""); target_public_ip = settings.get(int(target_id), {}).get("public_ip", "")
+        if vas_hosting_enabled() and source_public_ip and target_public_ip and source_public_ip != target_public_ip:
+            dns_errors = []
+            for domain in detail["domains"]:
+                host = domain.get("host")
+                if not host: continue
+                try:
+                    zone, record = await vas_find_a_record(host)
+                    if record.get("content") != source_public_ip:
+                        dns_errors.append(host + " ukazuje na " + str(record.get("content")) + ", očekáváno " + source_public_ip)
+                except Exception as exc:
+                    dns_errors.append(host + ": " + str(exc))
+            add("DNS cutover", len(dns_errors) == 0, "Váš Hosting připraven · " + source_public_ip + " → " + target_public_ip if not dns_errors else " · ".join(dns_errors))
+        elif source_public_ip == target_public_ip and source_public_ip:
+            add("DNS cutover", True, "Zdroj i cíl používají stejnou veřejnou IP " + source_public_ip + " · změna DNS není potřeba", "warning")
+        elif not vas_hosting_enabled():
+            add("DNS cutover", True, "Váš Hosting není nakonfigurován · DNS se při migraci nezmění", "warning")
+        else:
+            add("DNS cutover", True, "Chybí Public IP u zdrojového nebo cílového endpointu · DNS se při migraci nezmění", "warning")
     else: add("Proxy metadata", True, "Stack nemá dc1.proxy doménu", "warning")
     blocking = [c for c in checks if c["level"] == "error" and not c["ok"]]
     return {"version": "1.0.0", "read_only": True, "ready": len(blocking) == 0, "stack": detail["stack"], "target": {"id": target["Id"], "name": target["Name"]}, "containers": len(detail["containers"]), "volumes": [v["name"] for v in detail["volumes"]], "checks": checks}
