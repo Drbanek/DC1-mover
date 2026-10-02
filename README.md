@@ -1,11 +1,13 @@
-# DC1 Mover
+# Portainer Stack Mover
 
-DC1 Mover is a lightweight Portainer stack migration and cluster manager for moving standalone Docker Compose stacks between Portainer endpoints while preserving named volumes and providing pre-flight checks and rollback.
+Portainer Stack Mover is a lightweight Portainer stack migration and cluster manager for moving standalone Docker Compose stacks between Portainer endpoints while preserving named volumes and providing pre-flight checks and rollback.
 
 ## Features
 
 - Portainer endpoint and stack inventory
-- DC1 cluster dashboard and node-capacity overview
+- Configurable migration endpoints independent of endpoint names
+- Optional endpoint host-IP override for Agent/Edge/non-TCP setups
+- Cluster dashboard and endpoint-capacity overview
 - Capacity-based migration advisor
 - Pre-flight stack, volume and port collision checks
 - Named-volume migration through the Docker archive API
@@ -38,7 +40,8 @@ app/
 
 - Docker Engine with Docker Compose
 - Portainer with an API key that can access the relevant endpoints/stacks
-- Portainer endpoints named `DC1-NODE...` (migration targets are currently filtered by this prefix)
+- Portainer endpoints accessible by the configured API key
+- Migration targets explicitly enabled in the UI; endpoint names can be arbitrary
 
 ## Installation
 
@@ -59,6 +62,12 @@ By default the example configuration publishes the UI on `127.0.0.1:8081`. Set `
 ## Security
 
 Never commit `.env` or a real Portainer API key. `MOVER_SESSION_SECRET` must contain at least 32 characters. The current application connects to Portainer with TLS certificate verification disabled (`verify=False`), so keep the management service on a trusted network unless you change the TLS handling.
+
+## Endpoint configuration
+
+After first login, enable the Portainer endpoints that are allowed to receive migrated stacks. Endpoint names are display-only and may use any naming convention. For ordinary `tcp://host:port` endpoints, the mover derives the host IP automatically. For Portainer Agent, Edge, DNS-based or other endpoint types, set an explicit Host IP in the endpoint settings when host-bound Compose ports need to be rewritten.
+
+Endpoints that are not explicitly enabled are never offered as migration targets. This keeps management or infrastructure Docker environments out of the migration pool without relying on naming conventions.
 
 ## Migration behavior
 
