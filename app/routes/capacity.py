@@ -7,34 +7,29 @@ def fmt_bytes(value):
         if value < 1024 or unit == units[-1]: return f"{value:.1f} {unit}"
         value /= 1024
 
-async def host_disk_usage(endpoint_id, host_path):
-    helper = None
+async def agent_disk_usage(endpoint_id):
+    settings = get_endpoint_settings().get(int(endpoint_id), {})
+    agent_url = (settings.get("agent_url") or "").strip().rstrip("/")
+    token = settings.get("agent_token") or ""
+    if not agent_url:
+        raise RuntimeError("Capacity Agent není pro endpoint nastaven")
+    if not token:
+        raise RuntimeError("Capacity Agent token není pro endpoint nastaven")
     try:
-        await ensure_image(endpoint_id, "busybox:1.37")
-        create = await docker_request(endpoint_id, "POST", "/containers/create", json={
-            "Image": "busybox:1.37",
-            "Cmd": ["sh", "-c", "df -P -k /hostpath | tail -1"],
-            "HostConfig": {"Binds": [host_path + ":/hostpath:ro"], "NetworkMode": "none"}
-        })
-        if create.status_code != 201: raise RuntimeError("disk helper create failed: " + create.text)
-        helper = create.json()["Id"]
-        start_r = await docker_request(endpoint_id, "POST", f"/containers/{helper}/start")
-        if start_r.status_code != 204: raise RuntimeError("disk helper start failed: " + start_r.text)
-        for _ in range(30):
-            inspect = await docker_request(endpoint_id, "GET", f"/containers/{helper}/json")
-            if inspect.status_code != 200: raise RuntimeError("disk helper inspect failed: " + inspect.text)
-            if not bool((inspect.json().get("State") or {}).get("Running")): break
-            await asyncio.sleep(0.2)
-        else: raise RuntimeError("disk helper timed out")
-        logs = await docker_request(endpoint_id, "GET", f"/containers/{helper}/logs?stdout=1&stderr=1")
-        lines = [x.strip() for x in logs.text.replace("\x01","").replace("\x00","").splitlines() if x.strip()]
-        if not lines: raise RuntimeError("disk helper returned no df output")
-        parts = lines[-1].split()
-        if len(parts) < 6: raise RuntimeError("unexpected df output: " + lines[-1])
-        total, used, free = int(parts[-5])*1024, int(parts[-4])*1024, int(parts[-3])*1024
-        return {"path":host_path,"total":total,"used":used,"free":free,"percent":round(used/total*100,1) if total else 0}
-    finally:
-        if helper: await remove_container(endpoint_id, helper)
+        async with httpx.AsyncClient(timeout=5) as c:
+            r = await c.get(agent_url + "/capacity", headers={"X-Agent-Token": token})
+    except Exception as exc:
+        raise RuntimeError("Capacity Agent nedostupný: " + str(exc))
+    if r.status_code != 200:
+        raise RuntimeError("Capacity Agent HTTP " + str(r.status_code) + ": " + r.text[:200])
+    payload = r.json()
+    def normalize(name, display_path):
+        d = payload.get(name) or {}
+        total, used, free = int(d.get("total") or 0), int(d.get("used") or 0), int(d.get("free") or 0)
+        if total <= 0:
+            raise RuntimeError("Capacity Agent nevrátil platnou kapacitu " + display_path)
+        return {"path": display_path, "total": total, "used": used, "free": free, "percent": round(used / total * 100, 1)}
+    return normalize("data", "/srv"), normalize("system", "/var/lib/docker")
 
 async def node_capacity(endpoint):
     endpoint_id = endpoint["Id"]; info_r = await docker_request(endpoint_id, "GET", "/info")
@@ -59,10 +54,10 @@ async def node_capacity(endpoint):
     docker_root = str(info.get("DockerRootDir") or "/var/lib/docker")
     system_disk = data_disk = None
     system_disk_error = data_disk_error = None
-    try: system_disk = await host_disk_usage(endpoint_id, docker_root)
-    except Exception as exc: system_disk_error = str(exc)
-    try: data_disk = await host_disk_usage(endpoint_id, "/srv")
-    except Exception as exc: data_disk_error = str(exc)
+    try:
+        data_disk, system_disk = await agent_disk_usage(endpoint_id)
+    except Exception as exc:
+        system_disk_error = data_disk_error = str(exc)
     return {"id": endpoint_id, "name": endpoint["Name"], "cpu_count": cpus, "ram_total": total_ram, "ram_used_containers": used_ram, "ram_available_estimate": available_ram, "running_containers": running, "cpu_percent_containers": round(cpu_percent_total, 1), "docker_images_size": images_size, "docker_volumes_size": volumes_size, "docker_used_estimate": docker_used, "ram_total_human": fmt_bytes(total_ram), "ram_used_human": fmt_bytes(used_ram), "ram_available_human": fmt_bytes(available_ram), "docker_used_human": fmt_bytes(docker_used), "docker_root": docker_root,
         "system_disk": ({**system_disk, "total_human":fmt_bytes(system_disk["total"]), "used_human":fmt_bytes(system_disk["used"]), "free_human":fmt_bytes(system_disk["free"])} if system_disk else None), "system_disk_error":system_disk_error,
         "data_path":"/srv", "data_disk": ({**data_disk, "total_human":fmt_bytes(data_disk["total"]), "used_human":fmt_bytes(data_disk["used"]), "free_human":fmt_bytes(data_disk["free"])} if data_disk else None), "data_disk_error":data_disk_error,

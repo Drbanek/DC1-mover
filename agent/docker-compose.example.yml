@@ -1,0 +1,18 @@
+services:
+  capacity-agent:
+    build: .
+    restart: unless-stopped
+    environment:
+      AGENT_TOKEN: "${AGENT_TOKEN}"
+    ports:
+      - "192.168.52.11:9100:9100"
+    volumes:
+      - /srv:/host/srv:ro
+      - /var/lib/docker:/host/docker:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
