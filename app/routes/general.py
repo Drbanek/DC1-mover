@@ -6,8 +6,8 @@ async def health():
 
 @app.get("/api/inventory")
 async def inventory():
-    endpoints = await get_endpoints(); stacks = await get_stacks(); endpoint_names = {e["Id"]: e["Name"] for e in endpoints}
-    return [{"id": s["Id"], "name": s["Name"], "endpoint_id": s["EndpointId"], "endpoint": endpoint_names.get(s["EndpointId"], "Endpoint " + str(s["EndpointId"])), "status": s["Status"]} for s in stacks]
+    endpoints = await get_endpoints(); stacks = await get_stacks(); enabled_ids = {int(e["Id"]) for e in migration_endpoints(endpoints)}; endpoint_names = {e["Id"]: e["Name"] for e in endpoints}
+    return [{"id": s["Id"], "name": s["Name"], "endpoint_id": s["EndpointId"], "endpoint": endpoint_names.get(s["EndpointId"], "Endpoint " + str(s["EndpointId"])), "status": s["Status"]} for s in stacks if int(s.get("EndpointId") or 0) in enabled_ids]
 
 @app.get("/api/stacks/{stack_id}/detail")
 async def stack_detail(stack_id: int): return await build_detail(stack_id)
