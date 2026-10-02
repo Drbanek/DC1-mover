@@ -37,7 +37,7 @@ cd DockerStackMover
 cp .env.example .env
 ```
 
-Edit `.env`, especially `PORTAINER_URL`, `PORTAINER_TOKEN`, `MOVER_PASSWORD`, and `MOVER_SESSION_SECRET`.
+Edit `.env`, especially `PORTAINER_URL`, `PORTAINER_TOKEN`, `MOVER_PASSWORD`, and `MOVER_SESSION_SECRET`. For the optional Váš Hosting integration, also set `VAS_HOSTING_API_KEY`; never commit the API key.
 
 ```bash
 docker compose up -d --build
