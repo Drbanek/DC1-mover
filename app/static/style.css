@@ -79,3 +79,12 @@ td:last-child button { display: inline-block; margin: 2px 4px 2px 0 !important; 
   #dnsRecords .dns-ttl { width:10%; }
   #dnsRecords .dns-actions { width:100px; }
 }
+
+/* Keep selects visually aligned with text/number inputs. */
+.formgrid select,
+.formrow select {
+  height: 58px;
+  min-height: 58px;
+  padding: 0 14px;
+  line-height: 58px;
+}
