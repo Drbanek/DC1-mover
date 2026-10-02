@@ -253,8 +253,17 @@ async def docker_get(endpoint_id, path, params=None, allowed=(200,)):
         return r
 
 async def docker_request(endpoint_id, method, path, **kwargs):
+    # httpx sends Content-Length: 0 for body-less POST requests. Docker's
+    # /containers/{id}/start endpoint rejects any request body on API >= 1.24,
+    # so send a raw request without content headers when no body was requested.
     async with client() as c:
-        return await c.request(method, "/api/endpoints/" + str(endpoint_id) + "/docker" + path, **kwargs)
+        url = "/api/endpoints/" + str(endpoint_id) + "/docker" + path
+        if method.upper() == "POST" and "json" not in kwargs and "content" not in kwargs and "data" not in kwargs and "files" not in kwargs:
+            req = c.build_request(method, url, **kwargs)
+            req.headers.pop("Content-Length", None)
+            req.headers.pop("Transfer-Encoding", None)
+            return await c.send(req)
+        return await c.request(method, url, **kwargs)
 
 async def wait_container(endpoint_id, container_id, timeout=300):
     async with client() as c:
