@@ -2,6 +2,34 @@ from ..core import *
 from .general import stack_detail
 
 
+
+def endpoint_host_ip(endpoint):
+    """Resolve a usable node IP. Explicit Host IP is an override; otherwise derive it from Portainer."""
+    eid = int(endpoint.get("Id"))
+    configured = (get_endpoint_settings().get(eid, {}).get("host_ip") or "").strip()
+    if configured:
+        return configured, "configured"
+    candidates = [
+        endpoint.get("URL"), endpoint.get("Url"),
+        endpoint.get("PublicURL"), endpoint.get("PublicUrl"),
+        endpoint.get("EdgeCheckinInterval")
+    ]
+    for value in candidates:
+        if not isinstance(value, str) or not value.strip():
+            continue
+        value = value.strip()
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(value if "://" in value else "//" + value)
+            host = parsed.hostname
+            if host:
+                import ipaddress
+                ipaddress.ip_address(host)
+                return host, "portainer"
+        except Exception:
+            pass
+    return "", ""
+
 CAPACITY_AGENT_IMAGE = os.getenv("CAPACITY_AGENT_IMAGE", "ghcr.io/drbanek/dockerstackmover-capacity-agent:latest")
 CAPACITY_AGENT_CONTAINER = "dockerstackmover-capacity-agent"
 
@@ -18,9 +46,9 @@ async def install_capacity_agent(endpoint_id: int, session=Depends(require_csrf)
     if not endpoint:
         raise HTTPException(404, "Endpoint not found")
     settings = get_endpoint_settings().get(endpoint_id, {})
-    host_ip = (settings.get("host_ip") or "").strip()
+    host_ip, host_ip_source = endpoint_host_ip(endpoint)
     if not host_ip:
-        raise HTTPException(400, "Nejdřív nastav Host IP endpointu")
+        raise HTTPException(400, "Host IP se nepodařilo zjistit z Portainer endpointu. Nastav ji ručně v Endpoint settings.")
     token = secrets.token_hex(32)
     # Pull the centrally published agent image through Portainer.
     await ensure_image(endpoint_id, CAPACITY_AGENT_IMAGE)
@@ -62,7 +90,7 @@ async def install_capacity_agent(endpoint_id: int, session=Depends(require_csrf)
                 if int((payload.get("data") or {}).get("total") or 0) > 0 and int((payload.get("system") or {}).get("total") or 0) > 0:
                     save_endpoint_setting(endpoint_id, bool(settings.get("migration_enabled")), host_ip,
                         settings.get("site", ""), settings.get("public_ip", ""), agent_url, token)
-                    return {"ok": True, "agent_url": agent_url, "image": CAPACITY_AGENT_IMAGE}
+                    return {"ok": True, "agent_url": agent_url, "image": CAPACITY_AGENT_IMAGE, "host_ip": host_ip, "host_ip_source": host_ip_source}
             last_error = "health=" + str(health.status_code) + ", capacity=" + str(capacity.status_code)
         except Exception as exc:
             last_error = str(exc)
