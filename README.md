@@ -1,33 +1,37 @@
 # Portainer Stack Mover
 
-Portainer Stack Mover is a lightweight Portainer stack migration and cluster manager for moving standalone Docker Compose stacks between Portainer endpoints while preserving named volumes and providing pre-flight checks and rollback.
+**Čeština** | [English](README.en.md)
 
-## Features
+Portainer Stack Mover je lehký nástroj pro bezpečnou migraci samostatných Docker Compose stacků mezi endpointy v Portaineru. Přenáší named volumes, provádí kontroly před migrací a umožňuje návrat zpět pomocí rollbacku.
 
-- Portainer endpoint and stack inventory
-- Configurable migration endpoints independent of endpoint names
-- Optional endpoint host-IP override for Agent/Edge/non-TCP setups
-- Cluster dashboard and endpoint-capacity overview
-- Capacity-based migration advisor
-- Pre-flight stack, volume and port collision checks
-- Named-volume migration through the Docker archive API
-- Host bind-IP rewrite when moving between nodes
-- Target container/health verification with a 120-second timeout
-- Automatic source rollback when migration fails
-- Manual confirmation or rollback after a successful migration
-- SQLite migration history and per-stack migration locking
-- Built-in login, session and CSRF protection
+## Funkce
 
-## Project structure
+- přehled Portainer endpointů a stacků
+- libovolné názvy endpointů bez závislosti na pojmenování NODE/DC
+- explicitní výběr endpointů povolených pro migrace
+- volitelná Host IP pro Agent/Edge/non-TCP endpointy
+- přehled clusteru a kapacity endpointů
+- doporučení cílového endpointu podle kapacity
+- pre-flight kontrola kolizí stacků, volumes a portů
+- migrace named volumes přes Docker Archive API
+- automatický přepis Host IP u publikovaných portů
+- kontrola cílových kontejnerů/health checků s timeoutem 120 sekund
+- automatické obnovení zdroje při chybě migrace
+- ruční potvrzení nebo rollback po úspěšné migraci
+- persistentní historie migrací v SQLite
+- zámek proti souběžné migraci stejného stacku
+- přihlášení, session a CSRF ochrana
+
+## Struktura projektu
 
 ```text
 app/
-├── main.py                 # FastAPI entrypoint + static frontend
-├── core.py                 # Portainer/Docker helpers, DB, sessions, volume copy
+├── main.py
+├── core.py
 ├── routes/
-│   ├── general.py          # inventory, detail, targets, pre-flight
-│   ├── migration.py        # migration worker + authentication routes
-│   └── capacity.py         # cluster, capacity, advisor, confirm/rollback
+│   ├── general.py
+│   ├── migration.py
+│   └── capacity.py
 └── static/
     ├── index.html
     ├── style.css
@@ -36,14 +40,14 @@ app/
     └── migrations.js
 ```
 
-## Requirements
+## Požadavky
 
-- Docker Engine with Docker Compose
-- Portainer with an API key that can access the relevant endpoints/stacks
-- Portainer endpoints accessible by the configured API key
-- Migration targets explicitly enabled in the UI; endpoint names can be arbitrary
+- Docker Engine + Docker Compose
+- Portainer s API klíčem s přístupem k požadovaným endpointům/stackům
+- dostupné Portainer endpointy
+- cílové endpointy explicitně povolené v rozhraní Moveru
 
-## Installation
+## Instalace
 
 ```bash
 git clone https://github.com/Drbanek/DC1-mover.git
@@ -51,32 +55,40 @@ cd DC1-mover
 cp .env.example .env
 ```
 
-Edit `.env`, especially `PORTAINER_URL`, `PORTAINER_TOKEN`, `MOVER_PASSWORD`, and `MOVER_SESSION_SECRET`. Then start the service:
+Upravte `.env`, zejména `PORTAINER_URL`, `PORTAINER_TOKEN`, `MOVER_PASSWORD` a `MOVER_SESSION_SECRET`.
 
 ```bash
 docker compose up -d --build
 ```
 
-By default the example configuration publishes the UI on `127.0.0.1:8081`. Set `MOVER_BIND_IP` to the address on which the service should listen.
+Výchozí konfigurace publikuje rozhraní na `127.0.0.1:8081`. Pomocí `MOVER_BIND_IP` lze nastavit adresu, na které má služba poslouchat.
 
-## Security
+Podrobný český návod pro build, GHCR, Portainer a migrace je v [docs/KOMPILACE-DOCKER.md](docs/KOMPILACE-DOCKER.md).
 
-Never commit `.env` or a real Portainer API key. `MOVER_SESSION_SECRET` must contain at least 32 characters. The current application connects to Portainer with TLS certificate verification disabled (`verify=False`), so keep the management service on a trusted network unless you change the TLS handling.
+## Nastavení endpointů
 
-## Endpoint configuration
+Po přihlášení povolte pouze Docker endpointy, které mají být součástí migračního poolu. Názvy endpointů jsou pouze informativní a mohou být libovolné.
 
-After first login, enable the Portainer endpoints that are allowed to receive migrated stacks. Endpoint names are display-only and may use any naming convention. For ordinary `tcp://host:port` endpoints, the mover derives the host IP automatically. For Portainer Agent, Edge, DNS-based or other endpoint types, set an explicit Host IP in the endpoint settings when host-bound Compose ports need to be rewritten.
+U běžného `tcp://host:port` endpointu Mover zjistí Host IP automaticky. U Portainer Agent, Edge, DNS nebo jiného typu lze Host IP zadat ručně.
 
-Endpoints that are not explicitly enabled are never offered as migration targets. This keeps management or infrastructure Docker environments out of the migration pool without relying on naming conventions.
+## Průběh migrace
 
-## Migration behavior
+Mover zastaví zdrojový stack, přenese named volumes, vytvoří stack na cíli, ověří cílové kontejnery a původní stack ponechá zastavený pro případný rollback. Teprve explicitní potvrzení migrace odstraní původní kopii.
 
-The migration workflow stops the source stack, copies its named volumes, creates the target stack, waits for the target containers/health checks, and leaves the successful source stack stopped for rollback. Confirmation removes the old source stack and its migrated local volumes; rollback removes the target and starts the preserved source again.
+## Migrace mezi lokalitami
 
-## Development
+Endpointy nemusí být ve stejné LAN. Mohou být propojené privátní sítí/VPN nebo vhodně zabezpečeným veřejným spojením. Pro nezávislé lokality je vhodné mít v každé lokalitě vlastní reverse proxy.
 
-GitHub Actions validates Python syntax, Docker Compose configuration and the Docker image build on pushes and pull requests.
+Verze 1.0.0 automaticky nemění veřejné DNS. DNS integrace pro cross-site migrace je plánována jako další rozšíření.
 
-## License
+## Bezpečnost
+
+Nikdy neukládejte `.env`, Portainer API token, heslo ani session secret do repozitáře. `MOVER_SESSION_SECRET` musí mít alespoň 32 znaků. Aktuální verze používá pro spojení s Portainerem `verify=False`; Mover proto provozujte v důvěryhodné management síti, dokud nebude TLS ověřování upraveno.
+
+## Verze 1.0.0
+
+v1.0.0 představuje otestovaný základ migračního enginu: migrace stacku a persistentních volumes, Host IP rewrite, pre-flight kontroly, ověření cíle, historie, potvrzení migrace a rollback.
+
+## Licence
 
 MIT License — Copyright (c) 2026 Lukáš Kačírek.
