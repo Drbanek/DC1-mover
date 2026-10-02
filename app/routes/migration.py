@@ -92,8 +92,8 @@ async def migrate(stack_id: int, target_id: int):
 @app.post("/api/login")
 async def login(request: Request):
     payload = await request.json(); user = str(payload.get("username", "")); password = str(payload.get("password", ""))
-    if not hmac.compare_digest(user, MOVER_USER) or not password_ok(password): raise HTTPException(401, "Invalid credentials")
-    token, csrf = new_session(); response = Response(content=json.dumps({"ok": True, "csrf": csrf}), media_type="application/json")
+    if not authenticate(user, password): raise HTTPException(401, "Invalid credentials")
+    token, csrf = new_session(); sessions[token]["user"] = user; response = Response(content=json.dumps({"ok": True, "csrf": csrf}), media_type="application/json")
     response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="strict", secure=False, max_age=28800); return response
 
 @app.post("/api/logout")
