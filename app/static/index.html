@@ -1,24 +1,14 @@
 <!doctype html>
 <html lang="cs">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>DC1 Mover</title>
-  <link rel="stylesheet" href="/static/style.css">
-</head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DC1 Mover</title><link rel="stylesheet" href="/static/style.css"></head>
 <body>
-  <div id="loginOverlay" style="position:fixed;inset:0;background:#0f172a;z-index:9999;display:flex;align-items:center;justify-content:center">
-    <div class="card" style="width:min(420px,92vw)"><div class="body"><h2>DC1 Mover</h2><div class="muted" style="margin-bottom:14px">Přihlášení do migračního manageru</div><input id="loginUser" placeholder="Uživatel" value="admin" style="width:100%;box-sizing:border-box;margin-bottom:10px"><input id="loginPass" type="password" placeholder="Heslo" style="width:100%;box-sizing:border-box;margin-bottom:10px"><button onclick="login()">Přihlásit</button><div id="loginError" class="error" style="margin-top:10px"></div></div></div>
-  </div>
-<div class="wrap">
-  <h1>DC1 Mover</h1><div class="subtitle">Portainer Stack Migration Manager · v1.0.0 · Cluster dashboard</div>
-  <div class="card"><div class="header"><strong>Stacky</strong><button onclick="loadStacks()">Obnovit</button></div><div class="body"><table><thead><tr><th>STACK</th><th>NODE</th><th>STATUS</th><th>AKCE</th></tr></thead><tbody id="stacks"><tr><td colspan="4">Načítám...</td></tr></tbody></table></div></div>
-  <div class="card"><div class="header"><strong>DC1 Cluster</strong><button class="secondary" onclick="loadCluster()">Obnovit dashboard</button></div><div class="body" id="clusterDashboard"><div class="muted">Načítám cluster...</div></div></div>
-  <div class="card"><div class="header"><strong>Kapacita NODE</strong><button class="secondary" onclick="loadCapacity()">Obnovit</button></div><div class="body" id="capacity"><div class="muted">Načítám...</div></div></div>
-  <div class="card"><div class="header"><strong>Historie migrací</strong><button class="secondary" onclick="loadHistory()">Obnovit historii</button></div><div class="body" id="history"><div class="muted">Načítám...</div></div></div>
-  <div class="card" id="detail"><div class="header"><strong id="detailTitle">Detail</strong><button id="moveButton" onclick="openMove()">Přesunout</button></div><div class="body"><div class="grid"><div class="stat"><div class="label">NODE</div><div class="value" id="node"></div></div><div class="stat"><div class="label">KONTEJNERY</div><div class="value" id="containerCount"></div></div><div class="stat"><div class="label">VOLUMES</div><div class="value" id="volumeCount"></div></div></div><h3>Domény</h3><div id="domains"></div><h3>Kontejnery</h3><div id="containers"></div><h3>Persistentní volumes</h3><div id="volumes"></div></div></div>
-  <div class="card" id="movePanel"><div class="header"><strong id="moveTitle">Přesun stacku</strong><span class="badge running">READ-ONLY</span></div><div class="body"><div class="grid"><div class="stat"><div class="label">ZDROJ</div><div class="value" id="moveSource"></div></div><div class="stat"><div class="label">CÍL</div><select id="targetSelect"></select></div></div><div class="muted">Nejdřív proveď pre-flight. Potom lze spustit bezpečnou migraci. Zdrojový stack po úspěchu zůstane zachovaný a zastavený pro rollback.</div><div class="actions"><button class="secondary" onclick="closeMove()">Zrušit</button><button onclick="runPreflight()">Provést kontrolu</button></div><div id="preflight"></div></div></div>
-</div>
-<script src="/static/app.js"></script>
-</body>
-</html>
+<div id="loginOverlay" style="position:fixed;inset:0;background:#0f172a;z-index:9999;display:flex;align-items:center;justify-content:center"><div class="card" style="width:min(420px,92vw)"><div class="body"><h2>DC1 Mover</h2><div class="muted" style="margin-bottom:14px">Přihlášení do migračního manageru</div><input id="loginUser" placeholder="Uživatel" value="admin" style="width:100%;box-sizing:border-box;margin-bottom:10px"><input id="loginPass" type="password" placeholder="Heslo" style="width:100%;box-sizing:border-box;margin-bottom:10px"><button onclick="login()">Přihlásit</button><div id="loginError" class="error" style="margin-top:10px"></div></div></div></div>
+<div class="wrap"><h1>DC1 Mover</h1><div class="subtitle">Portainer Stack Migration Manager · v1.0.0 · Cluster dashboard</div>
+<div class="card"><div class="header"><strong>Stacky</strong><button onclick="loadStacks()">Obnovit</button></div><div class="body"><table><thead><tr><th>STACK</th><th>NODE</th><th>STATUS</th><th>AKCE</th></tr></thead><tbody id="stacks"><tr><td colspan="4">Načítám...</td></tr></tbody></table></div></div>
+<div class="card"><div class="header"><strong>DC1 Cluster</strong><button class="secondary" onclick="loadCluster()">Obnovit dashboard</button></div><div class="body" id="clusterDashboard"><div class="muted">Načítám cluster...</div></div></div>
+<div class="card"><div class="header"><strong>Kapacita NODE</strong><button class="secondary" onclick="loadCapacity()">Obnovit</button></div><div class="body" id="capacity"><div class="muted">Načítám...</div></div></div>
+<div class="card"><div class="header"><strong>Historie migrací</strong><button class="secondary" onclick="loadHistory()">Obnovit historii</button></div><div class="body" id="history"><div class="muted">Načítám...</div></div></div>
+<div class="card" id="detail"><div class="header"><strong id="detailTitle">Detail</strong><button id="moveButton" onclick="openMove()">Přesunout</button></div><div class="body"><div class="grid"><div class="stat"><div class="label">NODE</div><div class="value" id="node"></div></div><div class="stat"><div class="label">KONTEJNERY</div><div class="value" id="containerCount"></div></div><div class="stat"><div class="label">VOLUMES</div><div class="value" id="volumeCount"></div></div></div><h3>Domény</h3><div id="domains"></div><h3>Kontejnery</h3><div id="containers"></div><h3>Persistentní volumes</h3><div id="volumes"></div></div></div>
+<div class="card" id="movePanel"><div class="header"><strong id="moveTitle">Přesun stacku</strong><span class="badge running">READ-ONLY</span></div><div class="body"><div class="grid"><div class="stat"><div class="label">ZDROJ</div><div class="value" id="moveSource"></div></div><div class="stat"><div class="label">CÍL</div><select id="targetSelect"></select></div></div><div class="muted">Nejdřív proveď pre-flight. Potom lze spustit bezpečnou migraci. Zdrojový stack po úspěchu zůstane zachovaný a zastavený pro rollback.</div><div class="actions"><button class="secondary" onclick="closeMove()">Zrušit</button><button onclick="runPreflight()">Provést kontrolu</button></div><div id="preflight"></div></div></div></div>
+<script src="/static/base.js"></script><script src="/static/stacks.js"></script><script src="/static/migrations.js"></script>
+</body></html>
