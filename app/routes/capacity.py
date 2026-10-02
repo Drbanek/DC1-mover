@@ -129,6 +129,7 @@ async def delete_volume(endpoint_id, volume_name):
 
 @app.post("/api/migrations/{job_id}/confirm")
 async def confirm_migration(job_id: str, session=Depends(require_csrf)):
+    if "migrations" not in user_permissions(session.get("user","")): raise HTTPException(403,"Permission denied")
     job = load_job(job_id)
     if not job or job.get("status") != "success" or not job.get("result"): raise HTTPException(409, "Migration is not ready for confirmation")
     result = job["result"]
@@ -139,6 +140,7 @@ async def confirm_migration(job_id: str, session=Depends(require_csrf)):
 
 @app.post("/api/migrations/{job_id}/rollback")
 async def rollback_migration(job_id: str, session=Depends(require_csrf)):
+    if "migrations" not in user_permissions(session.get("user","")): raise HTTPException(403,"Permission denied")
     job = load_job(job_id)
     if not job or job.get("status") != "success" or not job.get("result"): raise HTTPException(409, "Migration is not ready for rollback")
     result = job["result"]
