@@ -2,7 +2,7 @@
 
 **Čeština** | [English](DOCKER-BUILD-DEPLOY.en.md)
 
-Tento dokument popisuje kompletní postup pro **Portainer Stack Mover v1.0.0** – build aplikace, publikaci Docker image do GHCR, nasazení přes Portainer, konfiguraci Docker endpointů a bezpečnou migraci stacku včetně rollbacku.
+Tento dokument popisuje kompletní postup pro **DockerStackMover v1.0.0** – build aplikace, publikaci Docker image do GHCR, nasazení přes Portainer, konfiguraci Docker endpointů a bezpečnou migraci stacku včetně rollbacku.
 
 > Cíl v1.0.0 je záměrně úzký: spolehlivě přenést Docker Compose/Portainer stack a jeho named volumes mezi vybranými Docker endpointy. Automatizace DNS a přepínání provozu mezi lokalitami budou řešeny samostatně.
 
@@ -23,7 +23,7 @@ Internet
 
 Management
    +-- Portainer
-   +-- Portainer Stack Mover
+   +-- DockerStackMover
 ```
 
 Názvy endpointů jsou libovolné. Aplikace nevyžaduje pojmenování typu `DC1-NODE01`. Endpointy určené pro migrace se explicitně povolují v rozhraní Moveru.
@@ -47,7 +47,7 @@ Mover nepotřebuje SSH přístup na jednotlivé Docker nody.
 Image sestavují GitHub Actions, nikoliv Portainer. Produkční nasazení používá předem sestavený image z GHCR:
 
 ```text
-ghcr.io/drbanek/dc1-mover:latest
+ghcr.io/drbanek/dockerstackmover:latest
 ```
 
 CI publikuje také image svázaný s konkrétním commitem. Tím je možné nasazení přesně reprodukovat.
@@ -64,7 +64,7 @@ GitHub Actions
    |
    v
 GHCR
-ghcr.io/drbanek/dc1-mover
+ghcr.io/drbanek/dockerstackmover
    |
    v
 Portainer
@@ -82,7 +82,7 @@ Doporučený způsob je **Git repository stack**.
 Repository:
 
 ```text
-https://github.com/Drbanek/DC1-mover
+https://github.com/Drbanek/DockerStackMover
 ```
 
 Reference:
