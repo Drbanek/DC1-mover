@@ -127,3 +127,19 @@ td:last-child button { display: inline-block; margin: 2px 4px 2px 0 !important; 
   #dnsRecords .dns-actions { white-space:normal !important; }
   #dnsRecords .dns-actions button { width:100%; margin:3px 0 !important; }
 }
+
+/* DNS editor: native select must match the normal input height exactly. */
+#dnsEditor .formgrid { align-items:end; }
+#dnsEditor .formgrid label { display:flex; flex-direction:column; }
+#dnsEditor input,
+#dnsEditor select {
+  box-sizing:border-box;
+  width:100%;
+  height:58px !important;
+  min-height:58px !important;
+  max-height:58px !important;
+  margin-top:6px;
+  padding:0 14px !important;
+  line-height:normal !important;
+}
+#dnsEditor select { appearance:auto; -webkit-appearance:menulist; }
