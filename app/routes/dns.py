@@ -3,7 +3,8 @@ from ..core import *
 async def _vas_request(method, path, payload=None):
     if not vas_hosting_enabled():
         raise HTTPException(409, "Váš Hosting API není nakonfigurováno")
-    async with httpx.AsyncClient(base_url=VAS_HOSTING_API_URL, headers={"X-API-Key": VAS_HOSTING_API_KEY, "Content-Type": "application/json"}, timeout=30) as c:
+    api_url, api_key = vas_config()
+    async with httpx.AsyncClient(base_url=api_url, headers={"X-API-Key": api_key, "Content-Type": "application/json"}, timeout=30) as c:
         r = await c.request(method, path, json=payload)
         if r.status_code not in (200, 201, 204):
             raise HTTPException(r.status_code, "Váš Hosting API: " + r.text[:500])
