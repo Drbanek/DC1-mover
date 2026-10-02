@@ -13,7 +13,7 @@ async def host_disk_usage(endpoint_id, docker_root):
         await ensure_image(endpoint_id, "busybox:1.37")
         create = await docker_request(endpoint_id, "POST", "/containers/create", json={
             "Image": "busybox:1.37",
-            "Cmd": ["sh", "-c", "df -B1 /dockerroot | tail -1"],
+            "Cmd": ["sh", "-c", "df -P -k /dockerroot | tail -1"],
             "HostConfig": {"Binds": [docker_root + ":/dockerroot:ro"], "NetworkMode": "none"}
         })
         if create.status_code != 201:
@@ -26,7 +26,8 @@ async def host_disk_usage(endpoint_id, docker_root):
         logs = await docker_request(endpoint_id, "GET", f"/containers/{helper}/logs?stdout=1&stderr=1")
         line = logs.text.strip().splitlines()[-1].replace("\x01", "").replace("\x00", "").strip()
         parts = line.split()
-        total, used, free = int(parts[-5]), int(parts[-4]), int(parts[-3])
+        total_kb, used_kb, free_kb = int(parts[-5]), int(parts[-4]), int(parts[-3])
+        total, used, free = total_kb * 1024, used_kb * 1024, free_kb * 1024
         pct = round((used / total * 100.0) if total else 0, 1)
         return {"total": total, "used": used, "free": free, "percent": pct}
     finally:
