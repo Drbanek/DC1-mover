@@ -63,7 +63,7 @@ async def node_capacity(endpoint):
     return {"id": endpoint_id, "name": endpoint["Name"], "cpu_count": cpus, "ram_total": total_ram, "ram_used_containers": used_ram, "ram_available_estimate": available_ram, "running_containers": running, "cpu_percent_containers": round(cpu_percent_total, 1), "docker_images_size": images_size, "docker_volumes_size": volumes_size, "docker_used_estimate": docker_used, "ram_total_human": fmt_bytes(total_ram), "ram_used_human": fmt_bytes(used_ram), "ram_available_human": fmt_bytes(available_ram), "docker_used_human": fmt_bytes(docker_used), "docker_root": docker_root, "disk_total": disk["total"] if disk else None, "disk_used": disk["used"] if disk else None, "disk_free": disk["free"] if disk else None, "disk_percent": disk["percent"] if disk else None, "disk_total_human": fmt_bytes(disk["total"]) if disk else None, "disk_used_human": fmt_bytes(disk["used"]) if disk else None, "disk_free_human": fmt_bytes(disk["free"]) if disk else None}
 
 @app.get("/api/cluster")
-async def cluster_dashboard(session=Depends(current_session)):
+async def cluster_dashboard(session=Depends(require_permission("dashboard_read"))):
     endpoints = await get_endpoints(); nodes = migration_endpoints(endpoints)
     async with client() as c:
         stacks_r = await c.get("/api/stacks")
@@ -81,7 +81,7 @@ async def cluster_dashboard(session=Depends(current_session)):
     return {"nodes": result, "recommended_endpoint_id": recommended}
 
 @app.get("/api/nodes/capacity")
-async def nodes_capacity(session=Depends(current_session)):
+async def nodes_capacity(session=Depends(require_permission("dashboard_read"))):
     endpoints = await get_endpoints(); nodes = migration_endpoints(endpoints); result = []
     for endpoint in nodes:
         try: result.append(await node_capacity(endpoint))
@@ -91,7 +91,7 @@ async def nodes_capacity(session=Depends(current_session)):
     return {"nodes": result, "recommended_endpoint_id": recommended, "method": "Recommendation uses estimated free RAM from total host RAM minus current container memory usage."}
 
 @app.get("/api/stacks/{stack_id}/advisor")
-async def migration_advisor(stack_id: int, session=Depends(current_session)):
+async def migration_advisor(stack_id: int, session=Depends(require_permission("migrations"))):
     detail = await stack_detail(stack_id); source_id = int(detail["stack"]["endpoint_id"]); endpoints = await get_endpoints(); nodes = [e for e in migration_endpoints(endpoints) if int(e.get("Id")) != source_id]
     source_volume_bytes = 0
     for volume in detail.get("volumes", []):
@@ -111,10 +111,10 @@ async def migration_advisor(stack_id: int, session=Depends(current_session)):
     return {"stack_id": stack_id, "source_endpoint_id": source_id, "source_volume_bytes": source_volume_bytes, "source_volume_human": fmt_bytes(source_volume_bytes), "recommended_endpoint_id": recommended, "candidates": candidates}
 
 @app.get("/api/migrations")
-async def migration_history(session=Depends(current_session)): return load_recent_jobs(100)
+async def migration_history(session=Depends(require_permission("migrations"))): return load_recent_jobs(100)
 
 @app.get("/api/migrations/{job_id}")
-async def migration_status(job_id: str, session=Depends(current_session)):
+async def migration_status(job_id: str, session=Depends(require_permission("migrations"))):
     job = load_job(job_id)
     if not job: raise HTTPException(404, "Migration job not found")
     return job
@@ -130,6 +130,7 @@ async def delete_volume(endpoint_id, volume_name):
 
 @app.post("/api/migrations/{job_id}/confirm")
 async def confirm_migration(job_id: str, session=Depends(require_csrf)):
+    if "migrations" not in user_permissions(session.get("user","")): raise HTTPException(403,"Permission denied")
     job = load_job(job_id)
     if not job or job.get("status") != "success" or not job.get("result"): raise HTTPException(409, "Migration is not ready for confirmation")
     result = job["result"]
@@ -140,6 +141,7 @@ async def confirm_migration(job_id: str, session=Depends(require_csrf)):
 
 @app.post("/api/migrations/{job_id}/rollback")
 async def rollback_migration(job_id: str, session=Depends(require_csrf)):
+    if "migrations" not in user_permissions(session.get("user","")): raise HTTPException(403,"Permission denied")
     job = load_job(job_id)
     if not job or job.get("status") != "success" or not job.get("result"): raise HTTPException(409, "Migration is not ready for rollback")
     result = job["result"]

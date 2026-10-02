@@ -47,6 +47,18 @@ def new_session():
     sessions[token] = {"user": MOVER_USER, "csrf": csrf}
     return token, csrf
 
+def user_permissions(username):
+    with db() as conn:
+        row = conn.execute("SELECT permissions FROM app_users WHERE username=? AND enabled=1", (username,)).fetchone()
+    return set((row["permissions"] or "").split(",")) if row else set()
+
+def require_permission(permission):
+    def dependency(session=Depends(current_session)):
+        if permission not in user_permissions(session.get("user", "")):
+            raise HTTPException(403, "Permission denied")
+        return session
+    return dependency
+
 def current_session(request: Request):
     token = request.cookies.get(SESSION_COOKIE)
     session = sessions.get(token)
@@ -108,6 +120,11 @@ def init_db():
             conn.execute("ALTER TABLE endpoint_settings ADD COLUMN public_ip TEXT")
         conn.execute("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, secret INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)")
         conn.execute("CREATE TABLE IF NOT EXISTS app_users (username TEXT PRIMARY KEY, password_hash TEXT NOT NULL, updated_at TEXT NOT NULL)")
+        user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(app_users)").fetchall()}
+        if "permissions" not in user_cols:
+            conn.execute("ALTER TABLE app_users ADD COLUMN permissions TEXT NOT NULL DEFAULT 'dashboard_read,migrations,dns_read,dns_write,admin'")
+        if "enabled" not in user_cols:
+            conn.execute("ALTER TABLE app_users ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
 
 def get_endpoint_settings():
     with db() as conn:
@@ -193,13 +210,13 @@ def create_admin(username, password):
     if not username or len(password) < 10:
         raise ValueError("Username is required and password must have at least 10 characters")
     with db() as conn:
-        conn.execute("INSERT INTO app_users(username,password_hash,updated_at) VALUES(?,?,?)", (username.strip(), password_hash(password), utcnow()))
+        conn.execute("INSERT INTO app_users(username,password_hash,updated_at,permissions,enabled) VALUES(?,?,?,?,1)", (username.strip(), password_hash(password), utcnow(), "dashboard_read,migrations,dns_read,dns_write,admin"))
 
 def authenticate(username, password):
     with db() as conn:
-        row = conn.execute("SELECT password_hash FROM app_users WHERE username = ?", (username,)).fetchone()
+        row = conn.execute("SELECT password_hash, enabled FROM app_users WHERE username = ?", (username,)).fetchone()
     if row:
-        return password_verify(password, row["password_hash"])
+        return bool(row["enabled"]) and password_verify(password, row["password_hash"])
     return bool(MOVER_PASSWORD) and hmac.compare_digest(username, MOVER_USER) and hmac.compare_digest(password, MOVER_PASSWORD)
 
 init_db()

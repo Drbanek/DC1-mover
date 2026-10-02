@@ -14,20 +14,21 @@ async def _vas_request(method, path, payload=None):
         except Exception: return None
 
 @app.get("/api/dns/status")
-async def dns_status(session=Depends(current_session)):
+async def dns_status(session=Depends(require_permission("dns_read"))):
     return {"provider": "vas-hosting", "configured": vas_hosting_enabled()}
 
 @app.get("/api/dns/domains")
-async def dns_domains(session=Depends(current_session)):
+async def dns_domains(session=Depends(require_permission("dns_read"))):
     data = await _vas_request("GET", "/domains")
     return [{"name": name, **meta} for name, meta in sorted((data or {}).items())]
 
 @app.get("/api/dns/domains/{zone}/records")
-async def dns_records(zone: str, session=Depends(current_session)):
+async def dns_records(zone: str, session=Depends(require_permission("dns_read"))):
     return await vas_dns_records(zone)
 
 @app.post("/api/dns/domains/{zone}/records")
 async def dns_create(zone: str, request: Request, session=Depends(require_csrf)):
+    if "dns_write" not in user_permissions(session.get("user","")): raise HTTPException(403,"Permission denied")
     payload = await request.json()
     allowed = {k: payload.get(k) for k in ("name","content","type","ttl","priority","note","isCloudflareProxy") if k in payload}
     await _vas_request("POST", "/domains/" + zone + "/dns-records", allowed)
@@ -35,6 +36,7 @@ async def dns_create(zone: str, request: Request, session=Depends(require_csrf))
 
 @app.put("/api/dns/domains/{zone}/records/{record_id}")
 async def dns_update(zone: str, record_id: str, request: Request, session=Depends(require_csrf)):
+    if "dns_write" not in user_permissions(session.get("user","")): raise HTTPException(403,"Permission denied")
     payload = await request.json()
     allowed = {k: payload.get(k) for k in ("name","content","type","ttl","priority","note","isCloudflareProxy") if k in payload}
     await _vas_request("POST", "/domains/" + zone + "/dns-records/" + record_id, allowed)
@@ -42,5 +44,6 @@ async def dns_update(zone: str, record_id: str, request: Request, session=Depend
 
 @app.delete("/api/dns/domains/{zone}/records/{record_id}")
 async def dns_delete(zone: str, record_id: str, session=Depends(require_csrf)):
+    if "dns_write" not in user_permissions(session.get("user","")): raise HTTPException(403,"Permission denied")
     await _vas_request("DELETE", "/domains/" + zone + "/dns-records/" + record_id)
     return {"ok": True, "records": await vas_dns_records(zone)}

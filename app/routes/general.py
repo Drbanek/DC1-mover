@@ -2,18 +2,18 @@ from ..core import *
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "1.1.0"}
+    return {"status": "ok", "version": "1.2.0"}
 
 @app.get("/api/inventory")
-async def inventory():
+async def inventory(session=Depends(require_permission("migrations"))):
     endpoints = await get_endpoints(); stacks = await get_stacks(); enabled_ids = {int(e["Id"]) for e in migration_endpoints(endpoints)}; endpoint_names = {e["Id"]: e["Name"] for e in endpoints}
     return [{"id": s["Id"], "name": s["Name"], "endpoint_id": s["EndpointId"], "endpoint": endpoint_names.get(s["EndpointId"], "Endpoint " + str(s["EndpointId"])), "status": s["Status"]} for s in stacks if int(s.get("EndpointId") or 0) in enabled_ids]
 
 @app.get("/api/stacks/{stack_id}/detail")
-async def stack_detail(stack_id: int): return await build_detail(stack_id)
+async def stack_detail(stack_id: int, session=Depends(require_permission("migrations"))): return await build_detail(stack_id)
 
 @app.get("/api/endpoints/settings")
-async def endpoint_settings_list(session=Depends(current_session)):
+async def endpoint_settings_list(session=Depends(require_permission("admin"))):
     endpoints = await get_endpoints(); settings = get_endpoint_settings(); result = []
     for endpoint in endpoints:
         eid = int(endpoint["Id"]); setting = settings.get(eid, {})
@@ -22,13 +22,14 @@ async def endpoint_settings_list(session=Depends(current_session)):
 
 @app.put("/api/endpoints/{endpoint_id}/settings")
 async def endpoint_settings_save(endpoint_id: int, request: Request, session=Depends(require_csrf)):
+    if "admin" not in user_permissions(session.get("user","")): raise HTTPException(403,"Permission denied")
     endpoints = await get_endpoints()
     if not any(int(e["Id"]) == endpoint_id for e in endpoints): raise HTTPException(404, "Endpoint not found")
     payload = await request.json(); save_endpoint_setting(endpoint_id, bool(payload.get("migration_enabled")), str(payload.get("host_ip") or ""), str(payload.get("site") or ""), str(payload.get("public_ip") or ""))
     return {"ok": True}
 
 @app.get("/api/stacks/{stack_id}/targets")
-async def migration_targets(stack_id: int):
+async def migration_targets(stack_id: int, session=Depends(require_permission("migrations"))):
     detail = await build_detail(stack_id); endpoints = await get_endpoints(); targets = []
     for endpoint in endpoints:
         if endpoint["Id"] == detail["stack"]["endpoint_id"]: continue
@@ -38,7 +39,7 @@ async def migration_targets(stack_id: int):
     return {"source": {"id": detail["stack"]["endpoint_id"], "name": detail["stack"]["endpoint"]}, "targets": targets}
 
 @app.get("/api/stacks/{stack_id}/preflight/{target_id}")
-async def preflight(stack_id: int, target_id: int):
+async def preflight(stack_id: int, target_id: int, session=Depends(require_permission("migrations"))):
     detail = await build_detail(stack_id); endpoints = await get_endpoints(); stacks = await get_stacks(); source_id = detail["stack"]["endpoint_id"]
     target = next((e for e in endpoints if e["Id"] == target_id), None)
     if not target: raise HTTPException(404, "Target endpoint not found")
@@ -92,7 +93,7 @@ async def preflight(stack_id: int, target_id: int):
             add("DNS cutover", True, "Chybí Public IP u zdrojového nebo cílového endpointu · DNS se při migraci nezmění", "warning")
     else: add("Proxy metadata", True, "Stack nemá dc1.proxy doménu", "warning")
     blocking = [c for c in checks if c["level"] == "error" and not c["ok"]]
-    return {"version": "1.1.0", "read_only": True, "ready": len(blocking) == 0, "stack": detail["stack"], "target": {"id": target["Id"], "name": target["Name"]}, "containers": len(detail["containers"]), "volumes": [v["name"] for v in detail["volumes"]], "checks": checks}
+    return {"version": "1.2.0", "read_only": True, "ready": len(blocking) == 0, "stack": detail["stack"], "target": {"id": target["Id"], "name": target["Name"]}, "containers": len(detail["containers"]), "volumes": [v["name"] for v in detail["volumes"]], "checks": checks}
 
 def endpoint_host_ip(endpoint):
     endpoint_id = int((endpoint or {}).get("Id") or 0); setting = get_endpoint_settings().get(endpoint_id, {})

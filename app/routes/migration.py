@@ -85,6 +85,7 @@ async def migration_worker(job):
 
 @app.post("/api/stacks/{stack_id}/migrate/{target_id}")
 async def migrate(stack_id: int, target_id: int, session=Depends(require_csrf)):
+    if "migrations" not in user_permissions(session.get("user","")): raise HTTPException(403,"Permission denied")
     active = next((j for j in load_recent_jobs(100) if j["stack_id"] == stack_id and j["status"] in ("queued", "running", "rollback")), None)
     if active: return {"job_id": active["id"], "status": active["status"]}
     job = new_job(stack_id, target_id); asyncio.create_task(migration_worker(job)); return {"job_id": job["id"], "status": job["status"]}
@@ -103,4 +104,4 @@ async def logout(request: Request):
     response = Response(content=json.dumps({"ok": True}), media_type="application/json"); response.delete_cookie(SESSION_COOKIE); return response
 
 @app.get("/api/session")
-async def session_info(session=Depends(current_session)): return {"authenticated": True, "user": session["user"], "csrf": session["csrf"]}
+async def session_info(session=Depends(current_session)): return {"authenticated": True, "user": session["user"], "csrf": session["csrf"], "permissions": sorted(user_permissions(session["user"])), "language": setting_get("language","cs")}
