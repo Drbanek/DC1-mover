@@ -7,43 +7,34 @@ def fmt_bytes(value):
         if value < 1024 or unit == units[-1]: return f"{value:.1f} {unit}"
         value /= 1024
 
-async def host_disk_usage(endpoint_id, docker_root):
+async def host_disk_usage(endpoint_id, host_path):
     helper = None
     try:
         await ensure_image(endpoint_id, "busybox:1.37")
         create = await docker_request(endpoint_id, "POST", "/containers/create", json={
             "Image": "busybox:1.37",
-            "Cmd": ["sh", "-c", "df -P -k /dockerroot | tail -1"],
-            "HostConfig": {"Binds": [docker_root + ":/dockerroot:ro"], "NetworkMode": "none"}
+            "Cmd": ["sh", "-c", "df -P -k /hostpath | tail -1"],
+            "HostConfig": {"Binds": [host_path + ":/hostpath:ro"], "NetworkMode": "none"}
         })
-        if create.status_code != 201:
-            raise RuntimeError("disk helper create failed: " + create.text)
+        if create.status_code != 201: raise RuntimeError("disk helper create failed: " + create.text)
         helper = create.json()["Id"]
-        start = await docker_request(endpoint_id, "POST", f"/containers/{helper}/start")
-        if start.status_code != 204:
-            raise RuntimeError("disk helper start failed: " + start.text)
-        # Wait for the short-lived helper without relying on the migration helper API.
-        # The previous implementation called wait_container(), which does not exist;
-        # that exception was swallowed by node_capacity() and rendered "nelze zjistit".
+        start_r = await docker_request(endpoint_id, "POST", f"/containers/{helper}/start")
+        if start_r.status_code != 204: raise RuntimeError("disk helper start failed: " + start_r.text)
         for _ in range(30):
             inspect = await docker_request(endpoint_id, "GET", f"/containers/{helper}/json")
-            if inspect.status_code != 200:
-                raise RuntimeError("disk helper inspect failed: " + inspect.text)
-            if not bool((inspect.json().get("State") or {}).get("Running")):
-                break
+            if inspect.status_code != 200: raise RuntimeError("disk helper inspect failed: " + inspect.text)
+            if not bool((inspect.json().get("State") or {}).get("Running")): break
             await asyncio.sleep(0.2)
-        else:
-            raise RuntimeError("disk helper timed out")
+        else: raise RuntimeError("disk helper timed out")
         logs = await docker_request(endpoint_id, "GET", f"/containers/{helper}/logs?stdout=1&stderr=1")
-        line = logs.text.strip().splitlines()[-1].replace("\x01", "").replace("\x00", "").strip()
-        parts = line.split()
-        total_kb, used_kb, free_kb = int(parts[-5]), int(parts[-4]), int(parts[-3])
-        total, used, free = total_kb * 1024, used_kb * 1024, free_kb * 1024
-        pct = round((used / total * 100.0) if total else 0, 1)
-        return {"total": total, "used": used, "free": free, "percent": pct}
+        lines = [x.strip() for x in logs.text.replace("\x01","").replace("\x00","").splitlines() if x.strip()]
+        if not lines: raise RuntimeError("disk helper returned no df output")
+        parts = lines[-1].split()
+        if len(parts) < 6: raise RuntimeError("unexpected df output: " + lines[-1])
+        total, used, free = int(parts[-5])*1024, int(parts[-4])*1024, int(parts[-3])*1024
+        return {"path":host_path,"total":total,"used":used,"free":free,"percent":round(used/total*100,1) if total else 0}
     finally:
-        if helper:
-            await remove_container(endpoint_id, helper)
+        if helper: await remove_container(endpoint_id, helper)
 
 async def node_capacity(endpoint):
     endpoint_id = endpoint["Id"]; info_r = await docker_request(endpoint_id, "GET", "/info")
@@ -66,15 +57,16 @@ async def node_capacity(endpoint):
         if isinstance(size, int) and size > 0: volumes_size += size
     docker_used = images_size + volumes_size
     docker_root = str(info.get("DockerRootDir") or "/var/lib/docker")
-    disk = None
-    try:
-        disk = await host_disk_usage(endpoint_id, docker_root)
-    except Exception as exc:
-        disk = None
-        disk_error = str(exc)
-    else:
-        disk_error = None
-    return {"id": endpoint_id, "name": endpoint["Name"], "cpu_count": cpus, "ram_total": total_ram, "ram_used_containers": used_ram, "ram_available_estimate": available_ram, "running_containers": running, "cpu_percent_containers": round(cpu_percent_total, 1), "docker_images_size": images_size, "docker_volumes_size": volumes_size, "docker_used_estimate": docker_used, "ram_total_human": fmt_bytes(total_ram), "ram_used_human": fmt_bytes(used_ram), "ram_available_human": fmt_bytes(available_ram), "docker_used_human": fmt_bytes(docker_used), "docker_root": docker_root, "disk_total": disk["total"] if disk else None, "disk_used": disk["used"] if disk else None, "disk_free": disk["free"] if disk else None, "disk_percent": disk["percent"] if disk else None, "disk_total_human": fmt_bytes(disk["total"]) if disk else None, "disk_used_human": fmt_bytes(disk["used"]) if disk else None, "disk_free_human": fmt_bytes(disk["free"]) if disk else None, "disk_error": disk_error}
+    system_disk = data_disk = None
+    system_disk_error = data_disk_error = None
+    try: system_disk = await host_disk_usage(endpoint_id, docker_root)
+    except Exception as exc: system_disk_error = str(exc)
+    try: data_disk = await host_disk_usage(endpoint_id, "/srv")
+    except Exception as exc: data_disk_error = str(exc)
+    return {"id": endpoint_id, "name": endpoint["Name"], "cpu_count": cpus, "ram_total": total_ram, "ram_used_containers": used_ram, "ram_available_estimate": available_ram, "running_containers": running, "cpu_percent_containers": round(cpu_percent_total, 1), "docker_images_size": images_size, "docker_volumes_size": volumes_size, "docker_used_estimate": docker_used, "ram_total_human": fmt_bytes(total_ram), "ram_used_human": fmt_bytes(used_ram), "ram_available_human": fmt_bytes(available_ram), "docker_used_human": fmt_bytes(docker_used), "docker_root": docker_root,
+        "system_disk": ({**system_disk, "total_human":fmt_bytes(system_disk["total"]), "used_human":fmt_bytes(system_disk["used"]), "free_human":fmt_bytes(system_disk["free"])} if system_disk else None), "system_disk_error":system_disk_error,
+        "data_path":"/srv", "data_disk": ({**data_disk, "total_human":fmt_bytes(data_disk["total"]), "used_human":fmt_bytes(data_disk["used"]), "free_human":fmt_bytes(data_disk["free"])} if data_disk else None), "data_disk_error":data_disk_error,
+        "disk_total": data_disk["total"] if data_disk else None, "disk_used": data_disk["used"] if data_disk else None, "disk_free": data_disk["free"] if data_disk else None, "disk_percent": data_disk["percent"] if data_disk else None, "disk_total_human":fmt_bytes(data_disk["total"]) if data_disk else None, "disk_used_human":fmt_bytes(data_disk["used"]) if data_disk else None, "disk_free_human":fmt_bytes(data_disk["free"]) if data_disk else None, "disk_error":data_disk_error}
 
 @app.get("/api/cluster")
 async def cluster_dashboard(session=Depends(require_permission("dashboard_read"))):
@@ -117,11 +109,14 @@ async def migration_advisor(stack_id: int, session=Depends(require_permission("m
             cap = await node_capacity(endpoint); warnings = []; ram_ratio = cap["ram_available_estimate"] / cap["ram_total"] if cap["ram_total"] else 0
             if ram_ratio < 0.20: warnings.append("Nízká RAM rezerva (<20 %)")
             if cap["cpu_percent_containers"] > 80: warnings.append("Vysoké aktuální CPU zatížení kontejnerů")
-            if source_volume_bytes: warnings.append("Volume data k přenosu: " + fmt_bytes(source_volume_bytes))
+            if source_volume_bytes:
+                warnings.append("Volume data k přenosu: " + fmt_bytes(source_volume_bytes))
+                if cap.get("data_disk") and source_volume_bytes > cap["data_disk"]["free"]: warnings.append("Nedostatek místa na DATA /srv")
             cap["warnings"] = warnings; cap["source_volume_bytes"] = source_volume_bytes; candidates.append(cap)
         except Exception as exc: candidates.append({"id": endpoint.get("Id"), "name": endpoint.get("Name"), "error": str(exc), "warnings": ["Kapacitu cíle se nepodařilo ověřit"]})
     healthy = [c for c in candidates if not c.get("error")]; recommended = None
-    if healthy: recommended = sorted(healthy, key=lambda n: (len([w for w in n["warnings"] if "Nízká RAM" in w or "Vysoké" in w]), -n["ram_available_estimate"], n["cpu_percent_containers"], n["running_containers"], n["id"]))[0]["id"]
+    if healthy:
+        recommended = sorted(healthy, key=lambda n: (1 if "Nedostatek místa na DATA /srv" in n["warnings"] else 0, len([w for w in n["warnings"] if "Nízká RAM" in w or "Vysoké" in w]), -(n.get("data_disk") or {}).get("free",0), -n["ram_available_estimate"], n["cpu_percent_containers"], n["id"]))[0]["id"]
     return {"stack_id": stack_id, "source_endpoint_id": source_id, "source_volume_bytes": source_volume_bytes, "source_volume_human": fmt_bytes(source_volume_bytes), "recommended_endpoint_id": recommended, "candidates": candidates}
 
 @app.get("/api/migrations")
