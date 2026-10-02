@@ -2,7 +2,7 @@ from ..core import *
 
 @app.get("/api/setup/status")
 async def setup_status():
-    return {"required": setup_required(), "version": "1.1.0"}
+    return {"required": setup_required(), "version": "1.2.0", "language": setting_get("language","cs")}
 
 @app.post("/api/setup")
 async def first_setup(request: Request):
@@ -23,24 +23,28 @@ async def first_setup(request: Request):
     setting_set("portainer_token", portainer_token, True)
     setting_set("vas_hosting_api_key", str(p.get("vas_hosting_api_key") or "").strip(), True)
     setting_set("vas_hosting_api_url", str(p.get("vas_hosting_api_url") or "https://portal.vas-hosting.cz/api/v1").strip())
+    setting_set("language", "en" if str(p.get("language") or "cs").lower()=="en" else "cs")
     return {"ok": True, "restart_required": False}
 
 @app.get("/api/app-settings")
-async def app_settings(session=Depends(current_session)):
+async def app_settings(session=Depends(require_permission("admin"))):
     return {
         "portainer_url": setting_get("portainer_url", PORTAINER_URL),
         "portainer_token_set": bool(setting_get("portainer_token", PORTAINER_TOKEN)),
         "vas_hosting_api_key_set": bool(setting_get("vas_hosting_api_key", VAS_HOSTING_API_KEY)),
-        "vas_hosting_api_url": setting_get("vas_hosting_api_url", VAS_HOSTING_API_URL)
+        "vas_hosting_api_url": setting_get("vas_hosting_api_url", VAS_HOSTING_API_URL),
+        "language": setting_get("language","cs")
     }
 
 @app.put("/api/app-settings")
 async def app_settings_save(request: Request, session=Depends(require_csrf)):
+    if "admin" not in user_permissions(session.get("user","")): raise HTTPException(403,"Permission denied")
     p = await request.json()
     if "portainer_url" in p: setting_set("portainer_url", str(p["portainer_url"]).strip().rstrip("/"))
     if p.get("portainer_token"): setting_set("portainer_token", str(p["portainer_token"]).strip(), True)
     if p.get("vas_hosting_api_key"): setting_set("vas_hosting_api_key", str(p["vas_hosting_api_key"]).strip(), True)
     if "vas_hosting_api_url" in p: setting_set("vas_hosting_api_url", str(p["vas_hosting_api_url"]).strip().rstrip("/"))
+    if "language" in p: setting_set("language", "en" if str(p["language"]).lower()=="en" else "cs")
     return {"ok": True, "restart_required": False}
 
 @app.put("/api/account/password")
