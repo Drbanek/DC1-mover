@@ -363,7 +363,9 @@ async def vas_find_a_record(host):
 async def vas_update_a_record(zone, record_id, host, content, ttl=60):
     if not vas_hosting_enabled():
         raise RuntimeError("Váš Hosting DNS is not configured")
-    payload = {"name": host.rstrip("."), "content": content, "type": "A", "ttl": int(ttl or 60)}
+    fqdn = host.rstrip(".")
+    relative_name = fqdn[:-len(zone)-1] if fqdn.endswith("." + zone) else ("" if fqdn == zone else fqdn)
+    payload = {"name": relative_name or zone, "content": content, "type": "A", "ttl": int(ttl or 60)}
     async with httpx.AsyncClient(base_url=VAS_HOSTING_API_URL, headers={"X-API-Key": VAS_HOSTING_API_KEY, "Content-Type": "application/json"}, timeout=30) as c:
         r = await c.post("/domains/" + zone + "/dns-records/" + str(record_id), json=payload)
         if r.status_code not in (200, 201, 204):
