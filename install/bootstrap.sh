@@ -20,7 +20,7 @@ GW=$(ip -4 route show default | awk 'NR==1{print $3}')
 [[ -n "$CIDR" && -n "$GW" ]] || die "Nelze zjistit IPv4/gateway."
 PREFIX=${CIDR#*/}
 CUR_IP=${CIDR%/*}
-[[ "$PREFIX" == 24 ]] || die "Automatické adresování v1.12 podporuje /24; zjištěno /$PREFIX."
+[[ "$PREFIX" == 24 ]] || die "Automatické LAN adresování v1.13 podporuje /24; zjištěno /$PREFIX."
 BASE=$(awk -F. '{print $1"."$2"."$3}' <<<"$CUR_IP")
 
 ask SITE "Označení lokality (např. DC1, DC2, PRAHA, PLZEN)" ""
@@ -174,7 +174,8 @@ echo "Po registraci DockerStackMover převezme management firewall vlastním pot
 echo
 echo "============================================================"
 echo "PŘIPRAVENO: $HOSTNAME_NEW"
-echo "Po aplikaci IP bude Portainer Agent lokálně: $TARGET_IP:9001"
+echo "LAN/DATA adresa: $TARGET_IP/$PREFIX"
+echo "Portainer Agent management: ${WG_ADDRESS%/*}:9001"
 echo "WireGuard public key serveru: $WG_PUB"
 echo "Na MAIN hub přidej peer s AllowedIPs=$WG_ADDRESS"
 echo "Po přidání peeru spusť: sudo systemctl start wg-quick@wg-dsm"
