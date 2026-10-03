@@ -299,6 +299,9 @@ async def confirm_migration(job_id: str, session=Depends(require_csrf)):
     if result.get("finalized"): return result
     await delete_stack(result["source_stack_id"], result["source_endpoint_id"])
     for volume_name in result.get("source_volumes", []): await delete_volume(result["source_endpoint_id"], volume_name)
+    for change in result.get("dns_changes", []):
+        if change.get("provider") == "vas-hosting":
+            await vas_update_a_record(change["zone"], change["record_id"], change["host"], change["new_content"], change.get("ttl") or 60)
     result["source_state"] = "deleted"; result["finalized"] = "confirmed"; persist_job(job); release_stack_lock(job["stack_id"], job["id"]); return result
 
 @app.post("/api/migrations/{job_id}/rollback")
