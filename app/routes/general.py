@@ -40,7 +40,7 @@ async def endpoint_remove_check(endpoint_id: int, session=Depends(require_permis
         return {"allowed": False, "role": role, "reason": "Odebrat lze pouze NODE nebo PROXY."}
     stacks = [s for s in await get_stacks() if int(s.get("EndpointId") or 0) == endpoint_id]
     containers = (await docker_get(endpoint_id, "/containers/json", params={"all": "1"})).json()
-    system_names = {"portainer_agent", "traefik"}
+    system_names = {"portainer_agent", "dockerstackmover-capacity-agent", "traefik"}
     workload_containers = []
     for item in containers:
         names = [str(x).lstrip("/") for x in (item.get("Names") or [])]
@@ -93,6 +93,23 @@ async def endpoint_remove(endpoint_id: int, request: Request, session=Depends(re
     mgmt_ip = str(setting.get("host_ip") or "").strip()
     if not all((hub_host, hub_user, hub_password, mgmt_ip)):
         raise HTTPException(400, "Pro bezpečné odebrání je potřeba SSH přístup na MAIN WireGuard HUB.")
+    # Deprovision only DockerStackMover-managed system containers. Workload
+    # containers/stacks were already rejected by the pre-flight above.
+    role = (check.get("role") or "").upper()
+    managed_containers = ["portainer_agent"]
+    if role == "NODE":
+        managed_containers.insert(0, "dockerstackmover-capacity-agent")
+    elif role == "PROXY":
+        managed_containers.insert(0, "traefik")
+    removed_containers = []
+    for container_name in managed_containers:
+        r = await docker_request(endpoint_id, "DELETE", "/containers/" + container_name,
+                                 params={"force": "1", "v": "0"})
+        if r.status_code in (204, 404):
+            if r.status_code == 204:
+                removed_containers.append(container_name)
+            continue
+        raise HTTPException(502, "Nelze odstranit systémový kontejner " + container_name + ": " + r.text)
     try:
         from .provisioning import _ssh, _run
         hub = _ssh(hub_host, hub_port, hub_user, hub_password)
@@ -130,7 +147,7 @@ PY
         raise HTTPException(502, "WireGuard peer byl odebrán, ale Portainer endpoint ne: " + r.text)
     with db() as conn:
         conn.execute("DELETE FROM endpoint_settings WHERE endpoint_id = ?", (endpoint_id,))
-    return {"ok": True, "role": check.get("role"), "endpoint_id": endpoint_id}
+    return {"ok": True, "role": check.get("role"), "endpoint_id": endpoint_id, "removed_containers": removed_containers}
 
 @app.get("/api/stacks/{stack_id}/targets")
 async def migration_targets(stack_id: int, session=Depends(require_permission("migrations"))):
