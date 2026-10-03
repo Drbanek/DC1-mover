@@ -203,7 +203,8 @@ async function bootstrapFirstPortainer(){
   const raw=await r.text();if(!r.ok)throw new Error(raw);const d=JSON.parse(raw);
   state.className="ready";state.innerHTML="✓ PORTAINER + WG HUB připraven<br>Portainer: "+esc(d.portainer_url)+"<br>WG: "+esc(d.hub_management_ip)+" · "+esc(d.wg_endpoint)+"<br><strong>Jednorázově si ulož Portainer admin heslo:</strong> <code>"+esc(d.portainer_admin_password)+"</code>";
   document.getElementById("bootPassword").value="";
-  document.getElementById("provSite").value=p.site;\n  document.getElementById("provPublicIp").value=p.public_ip||"";
+  document.getElementById("provSite").value=p.site;
+  document.getElementById("provPublicIp").value=p.public_ip||"";
   document.getElementById("provHubHost").value=p.lan_ip;
   document.getElementById("provHubUser").value=p.ssh_user;
   document.getElementById("provHubEndpoint").value=p.wg_endpoint;
