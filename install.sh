@@ -49,6 +49,8 @@ services:
       DSM_HOST_PREFIX: "${MOVER_PREFIX}"
     volumes:
       - data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/dockerstackmover:/opt/dockerstackmover
 volumes:
   data:
 EOF
