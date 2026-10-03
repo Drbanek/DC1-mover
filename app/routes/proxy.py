@@ -273,8 +273,12 @@ def _backend_port_for_stack(stack_name):
     return 20000 + (digest % 20000)
 
 
-def _inject_backend_publish(stack_file, service, host_ip, backend_port, container_port):
-    """Add a WireGuard-only published port to one compose service."""
+def _inject_backend_publish(stack_file, service, host_ip, backend_port, container_port, replace_managed=False):
+    """Add a WireGuard-only published port to one compose service.
+
+    During migration, replace any previous DSM-managed binding for the same
+    backend/container port so a stale source NODE address cannot survive.
+    """
     import yaml
     data = yaml.safe_load(stack_file) or {}
     services = data.get("services") or {}
@@ -283,6 +287,16 @@ def _inject_backend_publish(stack_file, service, host_ip, backend_port, containe
     svc = services[service] or {}
     ports = list(svc.get("ports") or [])
     binding = str(host_ip) + ":" + str(backend_port) + ":" + str(container_port)
+    if replace_managed:
+        suffix = ":" + str(backend_port) + ":" + str(container_port)
+        short_suffix = str(backend_port) + ":" + str(container_port)
+        cleaned = []
+        for item in ports:
+            value = str(item)
+            if value == short_suffix or value.endswith(suffix):
+                continue
+            cleaned.append(item)
+        ports = cleaned
     if binding not in [str(x) for x in ports]:
         ports.append(binding)
     svc["ports"] = ports
