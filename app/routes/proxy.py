@@ -44,7 +44,15 @@ async def _run_proxy_helper(proxy_id, cmd, env=None, host_network=False, binds=N
         started = await docker_request(proxy_id, "POST", "/containers/" + cid + "/start")
         if started.status_code not in (204, 304):
             raise RuntimeError("PROXY helper start failed: " + started.text)
-        code = await wait_container(proxy_id, cid, timeout=30)
+        code = None
+        for _ in range(60):
+            state = (await docker_get(proxy_id, "/containers/" + cid + "/json")).json().get("State") or {}
+            if not state.get("Running"):
+                code = int(state.get("ExitCode") or 0)
+                break
+            await asyncio.sleep(0.5)
+        if code is None:
+            raise RuntimeError("PROXY helper timeout")
         if code != 0:
             logs = await docker_request(proxy_id, "GET", "/containers/" + cid + "/logs", params={"stdout": "1", "stderr": "1"})
             raise RuntimeError("PROXY helper failed (" + str(code) + "): " + logs.text[-1000:])
