@@ -303,7 +303,11 @@ exit 51
 """, password, 1200)
             setup_token = _run(conn, r"""set -e
 for i in $(seq 1 20); do
-  TOKEN=$(docker logs portainer 2>&1 | sed -n 's/.*setup_token=\\([0-9a-fA-F]\\{64\\}\\).*/\\1/p' | tail -n1)
+  TOKEN=$(docker logs portainer 2>&1 | awk -F'setup_token=' 'NF>1 {print $2}' | awk '{print $1}' | tail -n1)
+  case "$TOKEN" in
+    (*[!0-9a-fA-F]*|'') TOKEN="" ;;
+  esac
+  [ "${#TOKEN}" -eq 64 ] || TOKEN=""
   if [ -n "$TOKEN" ]; then
     printf '%s' "$TOKEN"
     exit 0
