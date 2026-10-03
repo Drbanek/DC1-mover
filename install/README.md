@@ -1,4 +1,4 @@
-# DockerStackMover bootstrap v1.12
+# DockerStackMover bootstrap v1.13
 
 Bootstrap prepares a clean Ubuntu Server for a DockerStackMover site.
 
@@ -13,53 +13,72 @@ Bootstrap prepares a clean Ubuntu Server for a DockerStackMover site.
 
 REMOTE sites normally contain only PROXY and NODE servers. PORTAINER and MGMT stay in MAIN.
 
-## Run
+## Management overlay
+
+Management is router-agnostic. Every managed PROXY/NODE has its own WireGuard peer and connects outbound to the MAIN WireGuard hub. No public TCP 9001/9100 forwarding is required at REMOTE sites.
+
+Overlay convention:
+
+- network: `10.200.0.0/16`
+- MAIN Portainer/hub: `10.200.0.8`
+- recommended site mapping: `10.200.<site-number>.<role-octet>`
+- PROXY keeps `.9`; NODE keeps `.11-.29` inside the site's overlay range
+- Portainer Agent: TCP 9001 over `wg-dsm`
+- Node/Capacity Agent: TCP 9100 over `wg-dsm`
+
+Each REMOTE peer uses `PersistentKeepalive = 25`, so it remains usable behind NAT/stateful firewalls without inbound port forwarding. The MAIN hub must be reachable on UDP 51820 (or the configured WireGuard port).
+
+## MAIN hub
+
+Run on the central Portainer host:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Drbanek/DockerStackMover/main/install/wireguard-hub.sh -o /tmp/dsm-wg-hub.sh
+sudo bash /tmp/dsm-wg-hub.sh init
+```
+
+The command prints the MAIN public key. For every enrolled server:
+
+```bash
+sudo bash /tmp/dsm-wg-hub.sh add-peer
+```
+
+Enter the server's public key and its unique overlay /32.
+
+## Server bootstrap
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Drbanek/DockerStackMover/main/install/bootstrap.sh -o /tmp/dsm-bootstrap.sh
 sudo bash /tmp/dsm-bootstrap.sh
 ```
 
-The script detects the active /24 interface, current IPv4, gateway and DNS; requires an explicit site/location name and asks for role; derives the target address; checks for an address conflict; updates Ubuntu; installs Docker/Compose and nftables; sets hostname; installs Portainer Agent; and prepares Netplan.
+The bootstrap detects the active /24 interface, asks for site and role, derives the LAN address, installs Docker, nftables and WireGuard, installs Portainer Agent, prepares Netplan and creates `wg-dsm`.
 
-For NODE it also requires an explicit `SMAZAT` confirmation before wiping the selected DATA disk, creates GPT/XFS, mounts it at `/srv` with `prjquota`, and creates `/srv/stacks`.
+For NODE it also requires explicit `SMAZAT` confirmation before formatting the DATA disk as XFS and mounting it at `/srv`.
 
-## REMOTE NAT convention
+During bootstrap provide:
 
-For a server whose internal last octet is **N**:
+- MAIN WireGuard endpoint, e.g. `vpn.example.tld:51820`
+- MAIN WireGuard public key
+- unique management overlay address, e.g. `10.200.2.11/32`
+- MAIN Portainer overlay IP, default `10.200.0.8`
 
-- Portainer Agent: public TCP **9000+N** -> server TCP **9001**
-- Node Agent: public TCP **9100+N** -> server TCP **9100**
+The bootstrap prints the server public key. Add it to MAIN with `wireguard-hub.sh add-peer`, then start `wg-quick@wg-dsm`.
 
-Example DC2-NODE01 at `.11`:
+## Portainer enrollment
 
-- `PUBLIC_IP:9011 -> NODE01:9001`
-- `PUBLIC_IP:9111 -> NODE01:9100`
+Register environments by overlay IP, never by REMOTE public IP:
 
-The bootstrap does not modify the edge router. It prints the required DST-NAT mappings. Restrict those forwards to the trusted MAIN/DC management public IP.
+- `DC2-PROXY -> 10.200.2.9:9001`
+- `DC2-NODE01 -> 10.200.2.11:9001`
+- `DC2-NODE02 -> 10.200.2.12:9001`
 
-The host bootstrap nftables table protects TCP 9001 so it is accepted only from the trusted management IPv4 supplied during installation. It does not flush Docker's rules. After enrollment, DockerStackMover's Node Agent takes over managed firewall policy with the apply/confirm/automatic-rollback workflow.
+Node Agent URL follows the same rule, e.g. `http://10.200.2.11:9100`.
 
-## Enroll a REMOTE server
+## Firewall
 
-1. Configure the printed edge-router DST-NAT mappings.
-2. Add the printed public Portainer Agent address as an Environment in central Portainer.
-3. In DockerStackMover Endpoint settings set:
-   - Site (for example `DC2`)
-   - Role (`PROXY` or `NODE`)
-   - Host IP = private server IP
-   - Public IP = site's public IP
-   - Node Agent URL = printed public Node Agent URL
-   - Enable migrations only for NODE.
-4. Save settings.
-5. Run **Připravit NODE/server**. The preconfigured Agent URL is preserved, so DockerStackMover verifies the new agent through the REMOTE public/NAT path.
-6. Configure/confirm the managed firewall.
+Bootstrap nftables accepts TCP 9001/9100 only when it arrives on `wg-dsm` from the configured MAIN management IP and drops those ports from all other interfaces. DockerStackMover can later replace this bootstrap policy using its managed apply/confirm/rollback workflow.
 
-## Safety
+## Test topology
 
-- Existing mounted DATA disks are refused.
-- DATA formatting requires typing `SMAZAT`.
-- Netplan is backed up before changes and validated with `netplan generate`.
-- Target IPv4 is checked by ping and duplicate-address ARP probe.
-- Bootstrap firewall uses its own nftables table and never flushes Docker rules.
-- DockerStackMover managed firewall changes have a confirmation window and automatic rollback.
+For DC1/DC2 on the same routed network, the first test can use `192.168.52.8:51820` as the WireGuard endpoint. A real REMOTE site should use MAIN's public/DNS endpoint and only requires outbound UDP connectivity.

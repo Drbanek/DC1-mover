@@ -83,7 +83,8 @@ async def install_capacity_agent(endpoint_id: int, session=Depends(require_csrf)
     if start.status_code not in (204, 304):
         await remove_container(endpoint_id, container_id)
         raise HTTPException(start.status_code, "Capacity Agent start failed: " + start.text)
-    # REMOTE sites may preconfigure a public/NAT Agent URL; keep it instead of forcing the private Host IP.\n    agent_url = (settings.get("agent_url") or "").strip().rstrip("/") or ("http://" + host_ip + ":9100")
+    # Keep an explicitly configured Agent URL; otherwise use the resolved management host.
+    agent_url = (settings.get("agent_url") or "").strip().rstrip("/") or ("http://" + host_ip + ":9100")
     last_error = ""
     for _ in range(15):
         try:
