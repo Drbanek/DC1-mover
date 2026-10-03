@@ -1,4 +1,4 @@
-import os, shutil, json, subprocess, ipaddress
+import os, shutil, json, subprocess, ipaddress, threading, time, uuid
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
@@ -21,6 +21,28 @@ def nft(args, stdin=None):
 class FirewallPolicy(BaseModel):
     management_sources: list[str]
     management_ports: list[int] = [9001, 9100]
+    confirm_timeout: int = 90
+
+_pending = {}
+_pending_lock = threading.Lock()
+
+def managed_snapshot():
+    p=subprocess.run(["nft","-j","list","table","inet","dockerstackmover"],capture_output=True,text=True,timeout=10)
+    if p.returncode != 0: return None
+    try: return json.loads(p.stdout)
+    except Exception: return None
+
+def restore_snapshot(snapshot):
+    subprocess.run(["nft","delete","table","inet","dockerstackmover"],capture_output=True,text=True)
+    if snapshot:
+        nft(["-j","-f","-"],json.dumps(snapshot))
+
+def schedule_rollback(txid, seconds):
+    def worker():
+        time.sleep(seconds)
+        with _pending_lock: tx=_pending.pop(txid,None)
+        if tx: restore_snapshot(tx["before"])
+    threading.Thread(target=worker,daemon=True).start()
 
 def normalize_policy(p):
     sources=[]
