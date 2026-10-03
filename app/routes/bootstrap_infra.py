@@ -49,7 +49,7 @@ source /etc/os-release
 test "$ID" = ubuntu
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y ca-certificates curl wireguard
+apt-get install -y ca-certificates curl wireguard iputils-arping
 if ! command -v docker >/dev/null 2>&1; then
   install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
@@ -320,12 +320,20 @@ exit 51
                 if not dns_addrs:
                     dns_addrs = [gateway]
                 dns_yaml = ", ".join(dns_addrs)
-                # Duplicate Address Detection on the actual L2 segment. arping -D returns
-                # success only when no peer answers for the candidate address.
-                duplicate = _run(conn, "if arping -D -I " + shlex.quote(iface) + " -c 2 -w 3 " +
-                                 shlex.quote(lan_ip) + " >/dev/null 2>&1; then echo FREE; else echo USED; fi",
+                # Duplicate Address Detection on the actual L2 segment.
+                # Ubuntu Server may not have arping installed. Treat a missing/broken
+                # probe as an error, never as proof that the address is occupied.
+                duplicate = _run(conn, "if ! command -v arping >/dev/null 2>&1; then echo NO_ARPING; " +
+                                 "elif arping -D -I " + shlex.quote(iface) + " -c 2 -w 3 " +
+                                 shlex.quote(lan_ip) + " >/dev/null 2>&1; then echo FREE; " +
+                                 "else rc=$?; [ \"$rc\" -eq 1 ] && echo USED || echo PROBE_ERROR:$rc; fi",
                                  password)
-                if duplicate.strip() != "FREE":
+                duplicate = duplicate.strip()
+                if duplicate == "NO_ARPING":
+                    raise RuntimeError("Nelze ověřit cílovou LAN IP: na PORTAINER serveru chybí arping.")
+                if duplicate.startswith("PROBE_ERROR:"):
+                    raise RuntimeError("Kontrola cílové LAN IP selhala (" + duplicate + ").")
+                if duplicate != "FREE":
                     raise RuntimeError("Cílová LAN IP " + lan_ip + " už je na síti obsazená.")
                 switch = r"""set -e
 NETPLAN=$(find /etc/netplan -maxdepth 1 -type f \( -name '*.yaml' -o -name '*.yml' \) | head -n1)
