@@ -2,7 +2,7 @@ from ..core import *
 
 @app.get("/api/setup/status")
 async def setup_status():
-    return {"required": setup_required(), "version": "1.14.3", "language": setting_get("language","cs")}
+    return {"required": setup_required(), "version": "1.14.4", "language": setting_get("language","cs")}
 
 @app.post("/api/setup")
 async def first_setup(request: Request):
