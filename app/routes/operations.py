@@ -44,7 +44,11 @@ async def _stack_preflight(stack_id: int, target_id: int, progress=None):
         proxies=[s for s in es.values() if (s.get("role") or "").upper()=="PROXY" and (s.get("site") or "").strip().upper()==site]
         add("proxy_lan_ip",bool(lan),"Target LAN IP: "+lan if lan else "Target LAN IP is required for application proxy traffic")
         progress("proxy_site","running","Proxy lokality…")
-    add("proxy_site",bool(site) and len(proxies)==1,"Traefik PROXY ready for "+site if site and len(proxies)==1 else "Target site must have exactly one PROXY endpoint")
+        add("proxy_site",bool(site) and len(proxies)==1,"Traefik PROXY ready for "+site if site and len(proxies)==1 else "Target site must have exactly one PROXY endpoint")
+    else:
+        add("proxy_lan_ip",True,"Stack nemá proxy doménu","warning")
+        progress("proxy_site","running","Proxy lokality…")
+        add("proxy_site",True,"Stack nemá proxy doménu","warning")
     progress("data_capacity","running","Kapacita DATA /srv…")
     cap=await node_capacity(target)
     add("data_capacity",bool(cap.get("data_disk")),"DATA /srv capacity available" if cap.get("data_disk") else "DATA /srv capacity unavailable")
