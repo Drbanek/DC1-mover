@@ -150,7 +150,7 @@ docker rm -f portainer_agent >/dev/null 2>&1 || true
 docker run -d --name portainer_agent --restart=always -p 9001:9001 -v /var/run/docker.sock:/var/run/docker.sock -v /var/lib/docker/volumes:/var/lib/docker/volumes -v /:/host portainer/agent:2.45.1 >/dev/null
 # Do not continue to firewall/Portainer registration unless 9001 is actually
 # published and the Agent container is running.
-docker inspect -f '{{.State.Running}}' portainer_agent | grep -qx true
+docker inspect -f '{{{{.State.Running}}}}' portainer_agent | grep -qx true
 docker port portainer_agent 9001/tcp | grep -q ':9001"""
         _run(target,docker,password,900)
         steps.append("Docker + Portainer Agent OK")
