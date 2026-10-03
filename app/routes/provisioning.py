@@ -60,7 +60,35 @@ def _provision(payload):
         steps.append("SSH target OK")
         pre=_run(target,"source /etc/os-release; test \"$ID\" = ubuntu; ip -4 route show default | head -1; command -v sudo >/dev/null")
         steps.append("Pre-flight OK: "+pre.splitlines()[-1])
-        _run(target,"apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard ca-certificates curl",password,600)
+        if host != lan_ip:
+            netcmd=f"""IF=$(ip -4 route show default | awk 'NR==1{{print $5}}'); GW=$(ip -4 route show default | awk 'NR==1{{print $3}}'); CIDR=$(ip -o -4 addr show dev "$IF" scope global | awk 'NR==1{{print $4}}'); PREFIX="${{CIDR#*/}}"; test "$PREFIX" = 24; cat >/etc/netplan/99-dockerstackmover.yaml <<EOF
+network:
+  version: 2
+  ethernets:
+    $IF:
+      dhcp4: false
+      addresses: [{lan_ip}/24]
+      routes:
+        - to: default
+          via: $GW
+      nameservers:
+        addresses: [1.1.1.1,8.8.8.8]
+EOF
+netplan generate
+nohup sh -c 'sleep 2; netplan apply' >/tmp/dsm-netplan.log 2>&1 &"""
+            _run(target,netcmd,password)
+            target.close(); target=None
+            last=None
+            for _ in range(20):
+                time.sleep(2)
+                try:
+                    target=_ssh(lan_ip,ssh_port,user,password); break
+                except Exception as exc: last=exc
+            if target is None:
+                raise RuntimeError("LAN IP byla změněna, ale SSH na nové adrese "+lan_ip+" není dostupné: "+str(last))
+            host=lan_ip
+            steps.append("LAN IP changed to "+lan_ip)
+        _run(target,"apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard ca-certificates curl nftables",password,600)
         _run(target,"install -d -m 700 /etc/wireguard; if [ ! -f /etc/wireguard/dsm.key ]; then umask 077; wg genkey | tee /etc/wireguard/dsm.key | wg pubkey > /etc/wireguard/dsm.pub; fi",password)
         peer_pub=_run(target,"cat /etc/wireguard/dsm.pub",password)
         steps.append("WireGuard keypair OK")
@@ -123,7 +151,7 @@ nft add rule inet dockerstackmover-bootstrap input tcp dport '{{ 9001, 9100 }}' 
         return {"ok":True,"name":name,"site":site,"role":role,"lan_ip":lan_ip,"management_ip":mgmt_ip,
                 "wireguard_public_key":peer_pub,"steps":steps}
     finally:
-        try: target.close()
+        try:\n            if target: target.close()
         except Exception: pass
         if hub:
             try: hub.close()
