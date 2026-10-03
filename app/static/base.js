@@ -28,13 +28,30 @@ async function loadReadiness(){
   });
  }catch(e){box.innerHTML='<div class="error item">'+esc(e.message)+'</div>'}
 }
+const prepareNodeSteps=[["endpoint","Endpoint / Host IP"],["migration","Povolení migrací"],["image","Capacity Agent image"],["container","Spuštění Capacity Agentu"],["health","Ověření portu 9100"],["disk","DATA /srv"],["firewall","Firewall"],["ready","NODE readiness"]];
+function renderPrepareNodeProgress(box){
+ box.innerHTML="<div style='margin-top:12px'><strong>Průběh přípravy NODE</strong></div>"+prepareNodeSteps.map((x,i)=>"<div id='prep-step-"+x[0]+"' style='padding:3px 0'><span class='prepIcon' style='display:inline-block;width:22px'>"+(i===0?"◌":"○")+"</span><span>"+esc(x[1])+"</span><small class='muted prepDetail' style='margin-left:8px'></small></div>").join("");
+}
+function updatePrepareNodeStep(id,status,detail){
+ const row=document.getElementById("prep-step-"+id);if(!row)return;
+ const icon=row.querySelector(".prepIcon"),d=row.querySelector(".prepDetail");
+ icon.textContent=status==="done"?"✓":status==="error"?"✕":"◌";icon.style.color=status==="done"?"#86efac":status==="error"?"#f87171":"";
+ if(d&&detail)d.textContent=detail;
+ if(status==="done"){let n=row.nextElementSibling;if(n){const ni=n.querySelector(".prepIcon");if(ni&&ni.textContent==="○")ni.textContent="◌"}}
+}
 async function prepareNode(endpointId,button){
  const original=button.textContent;button.disabled=true;button.textContent="Připravuji NODE…";
+ const item=button.closest(".item"),progress=document.createElement("div");progress.className="prepareNodeProgress";item.appendChild(progress);renderPrepareNodeProgress(progress);
  try{
-  const r=await fetch("/api/endpoints/"+endpointId+"/prepare",{method:"POST",headers:{"X-CSRF-Token":csrfToken}});
-  const raw=await r.text();if(!r.ok)throw new Error(raw);
+  const r=await fetch("/api/endpoints/"+endpointId+"/prepare/stream",{method:"POST",headers:{"X-CSRF-Token":csrfToken}});
+  if(!r.ok)throw new Error(await r.text());
+  const reader=r.body.getReader(),decoder=new TextDecoder();let buf="",result=null;
+  while(true){const z=await reader.read();if(z.done)break;buf+=decoder.decode(z.value,{stream:true});const lines=buf.split("\n");buf=lines.pop();for(const line of lines){if(!line.trim())continue;const e=JSON.parse(line);if(e.type==="progress")updatePrepareNodeStep(e.step,e.status||"done",e.detail||"");else if(e.type==="error"){throw new Error(e.detail||"Příprava NODE selhala");}else if(e.type==="result")result=e.result}}
+  if(!result)throw new Error("Příprava NODE skončila bez výsledku.");
+  updatePrepareNodeStep("ready","done","NODE je připraven");
+  await new Promise(resolve=>setTimeout(resolve,600));
   await loadEndpointSettings();await loadReadiness();await loadCapacity();await loadCluster();
- }catch(e){alert("Příprava NODE selhala: "+e.message);button.disabled=false;button.textContent=original}
+ }catch(e){updatePrepareNodeStep("ready","error",e.message);const err=document.createElement("div");err.className="error";err.style.marginTop="8px";err.textContent=e.message;progress.appendChild(err);button.disabled=false;button.textContent=original}
 }
 
 async function loadCluster(){const box=document.getElementById("clusterDashboard");box.innerHTML='<div class="muted">Načítám migration cluster...</div>';try{const data=await getJson("/api/cluster");box.innerHTML="";const grid=document.createElement("div");grid.style.display="grid";grid.style.gridTemplateColumns="repeat(auto-fit,minmax(320px,1fr))";grid.style.gap="14px";data.nodes.forEach(function(node){const panel=document.createElement("div");panel.className="item";if(node.error){panel.innerHTML="<strong>"+esc(node.name||("Endpoint "+node.id))+"</strong><div class='error'>"+esc(node.error)+"</div>";grid.appendChild(panel);return}const ramUsed=node.ram_total-node.ram_available_estimate;const ramPct=percent(ramUsed,node.ram_total);const cpuPct=Math.max(0,Math.min(100,node.cpu_percent_containers));const recommended=node.id===data.recommended_endpoint_id?" · největší rezerva":"";panel.innerHTML="<strong style='font-size:17px'>"+esc(node.name)+recommended+"</strong><div class='muted' style='margin-top:8px'>CPU kontejnerů: "+cpuPct.toFixed(1)+"% · RAM: "+esc(node.ram_used_human)+" / "+esc(node.ram_total_human)+"</div><div style='height:8px;background:#e5e7eb;border-radius:6px;margin:7px 0 12px;overflow:hidden'><div style='height:100%;width:"+ramPct.toFixed(1)+"%;background:currentColor;opacity:.55'></div></div>";const title=document.createElement("div");title.className="muted";title.textContent="Stacky: "+node.stacks.length+" · kontejnery: "+node.running_containers+" · Docker data: "+node.docker_used_human;panel.appendChild(title);if(!node.stacks.length){const empty=document.createElement("div");empty.className="muted";empty.style.marginTop="10px";empty.textContent="Žádné stacky";panel.appendChild(empty)}node.stacks.forEach(function(stack){const row=document.createElement("div");row.style.display="flex";row.style.alignItems="center";row.style.justifyContent="space-between";row.style.gap="10px";row.style.marginTop="9px";row.style.paddingTop="9px";row.style.borderTop="1px solid #e5e7eb";const name=document.createElement("div");name.innerHTML="<strong>"+esc(stack.name)+"</strong><div class='muted'>Stack ID "+stack.id+"</div>";const button=document.createElement("button");button.className="secondary";button.textContent="Migrace";button.onclick=async function(){await showDetail(stack.id);const detail=document.getElementById("detail");if(detail)detail.scrollIntoView({behavior:"smooth",block:"start"})};row.appendChild(name);row.appendChild(button);panel.appendChild(row)});grid.appendChild(panel)});box.appendChild(grid)}catch(error){box.innerHTML='<div class="error item">'+esc(error.message)+'</div>'}}
