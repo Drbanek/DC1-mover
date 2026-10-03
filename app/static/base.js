@@ -82,9 +82,21 @@ async function backupSelectedStack(){
 }
 
 async function configureFirewall(endpointId){
- const source=prompt("Povolená management veřejná IP (např. 78.24.11.49):");if(!source)return;
- if(!confirm("Nastavit firewall NODE tak, aby TCP 9001 a 9100 přijímal pouze z "+source+"?"))return;
- try{const r=await fetch("/api/endpoints/"+endpointId+"/firewall",{method:"PUT",headers:{"Content-Type":"application/json","X-CSRF-Token":csrfToken},body:JSON.stringify({management_sources:[source],management_ports:[9001,9100]})});if(!r.ok)throw new Error(await r.text());await loadReadiness();alert("Firewall politika nastavena.")}catch(e){alert("Firewall selhal: "+e.message)}
+ const sourceText=prompt("Povolené management IPv4 adresy (odděl čárkou):","78.24.11.49");if(!sourceText)return;
+ const portText=prompt("Chráněné management TCP porty (odděl čárkou):","9001,9100");if(!portText)return;
+ const sources=sourceText.split(",").map(x=>x.trim()).filter(Boolean),ports=portText.split(",").map(x=>Number(x.trim())).filter(x=>Number.isInteger(x)&&x>0&&x<65536);
+ if(!sources.length||!ports.length){alert("Je nutná alespoň jedna IP a jeden platný port.");return}
+ if(!confirm("Aplikuji firewall DOČASNĚ na 90 sekund. Pokud jej nepotvrdíš, automaticky se vrátí předchozí stav.\n\nIP: "+sources.join(", ")+"\nPorty: "+ports.join(", ")))return;
+ try{
+  const r=await fetch("/api/endpoints/"+endpointId+"/firewall",{method:"PUT",headers:{"Content-Type":"application/json","X-CSRF-Token":csrfToken},body:JSON.stringify({management_sources:sources,management_ports:ports,confirm_timeout:90})});
+  const raw=await r.text();if(!r.ok)throw new Error(raw);const d=JSON.parse(raw);
+  if(!d.transaction_id)throw new Error("Agent nevrátil firewall transaction ID.");
+  const ok=confirm("Nová pravidla jsou aktivní a agent po změně odpovídá.\n\nPotvrdit je natrvalo?\n\nZrušit = okamžitý rollback. Bez potvrzení proběhne rollback automaticky.");
+  const action=ok?"confirm":"rollback";
+  const rr=await fetch("/api/endpoints/"+endpointId+"/firewall/"+action+"/"+encodeURIComponent(d.transaction_id),{method:"POST",headers:{"X-CSRF-Token":csrfToken}});
+  if(!rr.ok)throw new Error(await rr.text());
+  await loadReadiness();alert(ok?"Firewall potvrzen.":"Firewall vrácen do předchozího stavu.");
+ }catch(e){alert("Firewall změna nebyla potvrzena: "+e.message+"\nPokud byla pravidla aplikována, agent je automaticky vrátí po vypršení ochranného času.")}
 }
 
 async function showFirewall(endpointId,name){
