@@ -104,7 +104,7 @@ EOF
 
       # Apply asynchronously so the final instructions reach the terminal
       # before the old address disappears. Restart DSM after the new IP exists.
-      nohup bash -c "sleep 3; netplan apply; cd /opt/dockerstackmover && docker compose up -d" >/var/log/dockerstackmover-ip-switch.log 2>&1 &
+      nohup bash -c "sleep 3; netplan apply; docker compose --env-file /opt/dockerstackmover/.env -f /opt/dockerstackmover/compose.yaml up -d --force-recreate" >/var/log/dockerstackmover-ip-switch.log 2>&1 &
       exit 0
     fi
 
