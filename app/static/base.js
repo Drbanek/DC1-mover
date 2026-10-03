@@ -121,6 +121,25 @@ async function showFirewall(endpointId,name){
 }
 
 
+const provisioningSteps=[
+ ["ssh","SSH připojení"],["preflight","Pre-flight kontrola"],["lan","LAN konfigurace"],
+ ["wg_key","WireGuard klíče"],["wg_peer","Registrace peeru na MAIN"],["wg_start","Spuštění WireGuardu"],
+ ["wg_handshake","WireGuard handshake"],["wg_forward","WireGuard forwarding"],["data_disk","DATA disk /srv"],
+ ["docker","Docker + Portainer Agent"],["firewall","Management firewall"],["main_test","MAIN → Portainer Agent"],
+ ["portainer","Registrace v Portaineru"]
+];
+function renderProvisionProgress(state,role){
+ const steps=provisioningSteps.filter(x=>!(role!=="NODE"&&x[0]==="data_disk"));
+ state.innerHTML="<div style='margin-bottom:8px'><strong>Průběh provisioningu</strong></div>"+steps.map((x,i)=>"<div id='prov-step-"+x[0]+"' style='padding:3px 0'><span class='provIcon' style='display:inline-block;width:22px'>"+(i===0?"◌":"○")+"</span><span>"+esc(x[1])+"</span><small class='muted provDetail' style='margin-left:8px'></small></div>").join("");
+}
+function updateProvisionStep(id,status,detail){
+ const row=document.getElementById("prov-step-"+id);if(!row)return;
+ const icon=row.querySelector(".provIcon"),d=row.querySelector(".provDetail");
+ icon.textContent=status==="done"?"✓":status==="error"?"✕":"◌";
+ icon.style.color=status==="done"?"#86efac":status==="error"?"#f87171":"";
+ if(d&&detail)d.textContent=detail;
+ if(status==="done"){let n=row.nextElementSibling;while(n&&!n.id.startsWith("prov-step-"))n=n.nextElementSibling;if(n){const ni=n.querySelector(".provIcon");if(ni&&ni.textContent==="○")ni.textContent="◌"}}
+}
 async function provisionServer(){
  const b=document.getElementById("provButton"),state=document.getElementById("provState");
  const payload={name:document.getElementById("provName").value,site:document.getElementById("provSite").value,role:document.getElementById("provRole").value,
@@ -130,13 +149,17 @@ async function provisionServer(){
   hub_endpoint:document.getElementById("provHubEndpoint").value,hub_management_ip:"10.200.0.8",manager_management_ip:"10.200.0.10"};
  if(!payload.host||!payload.lan_ip||!payload.management_ip||!payload.ssh_password||!payload.hub_ssh_password){alert("Vyplň SSH adresu, LAN/management IP a obě SSH hesla.");return}
  if(!confirm("Připravit "+(payload.name||payload.host)+"?\n\nPo ověření WireGuardu budou porty 9001/9100 dostupné pouze přes management overlay."))return;
- b.disabled=true;state.textContent="Provisioning běží – SSH, WireGuard, Docker, firewall, Portainer…";
+ b.disabled=true;renderProvisionProgress(state,payload.role);
  try{
-  const r=await fetch("/api/provisioning/server",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":csrfToken},body:JSON.stringify(payload)});
-  const raw=await r.text();if(!r.ok)throw new Error(raw);const d=JSON.parse(raw);
-  state.innerHTML="<span style='color:#86efac'>✓ "+esc(d.name)+" připraven</span><br>"+d.steps.map(x=>"✓ "+esc(x)).join("<br>")+"<br>Management: "+esc(d.management_ip);
+  const r=await fetch("/api/provisioning/server/stream",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":csrfToken},body:JSON.stringify(payload)});
+  if(!r.ok)throw new Error(await r.text());
+  const reader=r.body.getReader(),decoder=new TextDecoder();let buf="",result=null;
+  while(true){const z=await reader.read();if(z.done)break;buf+=decoder.decode(z.value,{stream:true});const lines=buf.split("\n");buf=lines.pop();for(const line of lines){if(!line.trim())continue;const e=JSON.parse(line);if(e.type==="progress")updateProvisionStep(e.step,e.status||"done",e.detail||"");else if(e.type==="error"){if(e.step)updateProvisionStep(e.step,"error",e.detail);throw new Error(e.detail)}else if(e.type==="result")result=e.result}}
+  if(!result)throw new Error("Provisioning skončil bez výsledku.");
+  const title=document.createElement("div");title.style.cssText="color:#86efac;font-weight:700;margin-top:12px";title.textContent="✓ "+result.name+" připraven · Management: "+result.management_ip;state.appendChild(title);
   document.getElementById("provPassword").value="";document.getElementById("provHubPassword").value="";
   await loadEndpointSettings();await loadReadiness();
- }catch(e){state.innerHTML="<span class='error'>"+esc(e.message)+"</span>";}
+ }catch(e){const x=document.createElement("div");x.className="error";x.style.marginTop="12px";x.textContent=e.message;state.appendChild(x)}
  finally{b.disabled=false}
 }
+

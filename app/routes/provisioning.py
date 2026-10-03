@@ -3,6 +3,9 @@ import ipaddress
 import shlex
 import socket
 import time
+import json
+import queue
+import uuid
 
 import paramiko
 from fastapi import Depends, HTTPException, Request
@@ -37,7 +40,8 @@ def _run(c, command, password=None, timeout=300):
     return out.strip()
 
 
-def _provision(payload):
+def _provision(payload, progress=None):
+    progress = progress or (lambda step, status='done', detail='': None)
     host = str(payload.get("host") or "").strip()
     user = str(payload.get("ssh_user") or "").strip()
     password = str(payload.get("ssh_password") or "")
@@ -61,13 +65,16 @@ def _provision(payload):
     if not mgmt_ip.startswith("10.200."):
         raise ValueError("Management IP musí být z overlay 10.200.0.0/16.")
     steps=[]
+    progress("ssh","running","Připojuji se přes SSH…")
     target=_ssh(host,ssh_port,user,password)
     hub=None
     try:
-        steps.append("SSH target OK")
+        steps.append("SSH target OK"); progress("ssh","done","SSH target OK")
+        progress("preflight","running","Kontroluji Ubuntu, route a sudo…")
         pre=_run(target,"source /etc/os-release; test \"$ID\" = ubuntu; ip -4 route show default | head -1; command -v sudo >/dev/null")
-        steps.append("Pre-flight OK: "+pre.splitlines()[-1])
+        steps.append("Pre-flight OK: "+pre.splitlines()[-1]); progress("preflight","done","Pre-flight OK: "+pre.splitlines()[-1])
         if host != lan_ip:
+            progress("lan","running","Nastavuji LAN IP "+lan_ip+"…")
             netcmd=f"""IF=$(ip -4 route show default | awk 'NR==1{{print $5}}'); GW=$(ip -4 route show default | awk 'NR==1{{print $3}}'); CIDR=$(ip -o -4 addr show dev "$IF" scope global | awk 'NR==1{{print $4}}'); PREFIX="${{CIDR#*/}}"; test "$PREFIX" = 24; cat >/etc/netplan/99-dockerstackmover.yaml <<EOF
 network:
   version: 2
@@ -94,11 +101,14 @@ nohup sh -c 'sleep 2; netplan apply' >/tmp/dsm-netplan.log 2>&1 &"""
             if target is None:
                 raise RuntimeError("LAN IP byla změněna, ale SSH na nové adrese "+lan_ip+" není dostupné: "+str(last))
             host=lan_ip
-            steps.append("LAN IP changed to "+lan_ip)
+            steps.append("LAN IP changed to "+lan_ip); progress("lan","done","LAN IP changed to "+lan_ip)
+        if host == lan_ip: progress("lan","done","LAN IP už je nastavena: "+lan_ip)
+        progress("wg_key","running","Instaluji balíčky a připravuji WireGuard klíče…")
         _run(target,"apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard ca-certificates curl nftables",password,600)
         _run(target,"install -d -m 700 /etc/wireguard; if [ ! -f /etc/wireguard/dsm.key ]; then umask 077; wg genkey | tee /etc/wireguard/dsm.key | wg pubkey > /etc/wireguard/dsm.pub; fi",password)
         peer_pub=_run(target,"cat /etc/wireguard/dsm.pub",password)
-        steps.append("WireGuard keypair OK")
+        steps.append("WireGuard keypair OK"); progress("wg_key","done","WireGuard keypair OK")
+        progress("wg_peer","running","Registruji peer na MAIN…")
         hub=_ssh(hub_host,hub_ssh_port,hub_user,hub_password)
         hub_pub=_run(hub,"cat /etc/wireguard/hub.pub",hub_password)
         hub_conf="/etc/wireguard/wg-dsm.conf"
@@ -111,7 +121,8 @@ AllowedIPs = {mgmt_ip}/32
 EOF
 wg set wg-dsm peer {peer_pub} allowed-ips {mgmt_ip}/32"""
         _run(hub,add,hub_password)
-        steps.append("Peer registered on MAIN")
+        steps.append("Peer registered on MAIN"); progress("wg_peer","done","Peer registered on MAIN")
+        progress("wg_start","running","Zapínám WireGuard overlay…")
         cfg=f"""cat >/etc/wireguard/wg-dsm.conf <<'EOF'
 [Interface]
 Address = {mgmt_ip}/32
@@ -129,17 +140,20 @@ EOF
 chmod 600 /etc/wireguard/wg-dsm.conf
 systemctl enable --now wg-quick@wg-dsm"""
         _run(target,cfg,password)
-        steps.append("WireGuard started")
+        steps.append("WireGuard started"); progress("wg_start","done","WireGuard started")
+        progress("wg_handshake","running","Čekám na WireGuard handshake…")
         time.sleep(2)
         hs=_run(hub,f"wg show wg-dsm latest-handshakes | grep -F {shlex.quote(peer_pub)} || true",hub_password)
         if not hs or hs.split()[-1]=="0":
             raise RuntimeError("WireGuard handshake se nepotvrdil.")
-        steps.append("WireGuard handshake OK")
+        steps.append("WireGuard handshake OK"); progress("wg_handshake","done","WireGuard handshake OK")
         # The hub routes management traffic between WireGuard peers. Keep this
         # independent of Docker's FORWARD policy (which is commonly DROP).
+        progress("wg_forward","running","Ověřuji forwarding management overlay…")
         _run(hub,"sysctl -w net.ipv4.ip_forward=1 >/dev/null; printf 'net.ipv4.ip_forward=1\\n' >/etc/sysctl.d/99-dockerstackmover-wg-forward.conf; iptables -C FORWARD -i wg-dsm -o wg-dsm -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i wg-dsm -o wg-dsm -j ACCEPT",hub_password)
-        steps.append("WireGuard peer forwarding OK")
+        steps.append("WireGuard peer forwarding OK"); progress("wg_forward","done","WireGuard peer forwarding OK")
         if role == "NODE":
+            progress("data_disk","running","Kontroluji/připravuji DATA disk /srv…")
             diskcmd = """if findmnt -rn -T /srv >/dev/null 2>&1 && [ "$(findmnt -rn -T /srv -o TARGET)" = "/srv" ]; then
   echo "EXISTING $(findmnt -rn -T /srv -o SOURCE)"
   exit 0
@@ -185,7 +199,8 @@ echo "CREATED $DISK -> $PART -> /srv"
 """
             diskcmd = diskcmd.replace("__DATA_DISK__", shlex.quote(data_disk or "AUTO"))
             disk_result = _run(target,diskcmd,password,900)
-            steps.append("DATA disk OK: "+disk_result.splitlines()[-1])
+            steps.append("DATA disk OK: "+disk_result.splitlines()[-1]); progress("data_disk","done","DATA disk OK: "+disk_result.splitlines()[-1])
+        progress("docker","running","Instaluji/opravuji Docker a Portainer Agent…")
         docker="""if ! command -v docker >/dev/null; then install -m 0755 -d /etc/apt/keyrings; curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc; chmod a+r /etc/apt/keyrings/docker.asc; . /etc/os-release; echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $VERSION_CODENAME stable" >/etc/apt/sources.list.d/docker.list; apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; fi
 systemctl enable --now docker
 systemctl restart docker
@@ -196,7 +211,8 @@ docker run -d --name portainer_agent --restart=always -p 9001:9001 -v /var/run/d
 docker inspect portainer_agent >/dev/null 2>&1
 docker port portainer_agent 9001/tcp | grep -q 9001"""
         _run(target,docker,password,900)
-        steps.append("Docker + Portainer Agent OK")
+        steps.append("Docker + Portainer Agent OK"); progress("docker","done","Docker + Portainer Agent OK")
+        progress("firewall","running","Aplikuji management firewall…")
         fw=f"""systemctl enable nftables
 mkdir -p /etc/nftables.d
 nft delete table inet dockerstackmover-bootstrap >/dev/null 2>&1 || true
@@ -211,10 +227,11 @@ nft list table inet dockerstackmover-bootstrap >/etc/nftables.d/dockerstackmover
 grep -qF 'include \"/etc/nftables.d/*.nft\"' /etc/nftables.conf || echo 'include \"/etc/nftables.d/*.nft\"' >>/etc/nftables.conf
 docker port portainer_agent 9001/tcp | grep -q 9001"""
         _run(target,fw,password)
-        steps.append("Management firewall OK")
+        steps.append("Management firewall OK"); progress("firewall","done","Management firewall OK")
         # Test the exact central management path before returning success.
+        progress("main_test","running","Testuji MAIN → management IP :9001…")
         _run(hub,f"timeout 4 bash -lc '</dev/tcp/{mgmt_ip}/9001'")
-        steps.append("MAIN -> "+mgmt_ip+":9001 OK")
+        steps.append("MAIN -> "+mgmt_ip+":9001 OK"); progress("main_test","done","MAIN -> "+mgmt_ip+":9001 OK")
         return {"ok":True,"name":name,"site":site,"role":role,"lan_ip":lan_ip,"management_ip":mgmt_ip,
                 "wireguard_public_key":peer_pub,"steps":steps}
     finally:
@@ -225,6 +242,59 @@ docker port portainer_agent 9001/tcp | grep -q 9001"""
             try: hub.close()
             except Exception: pass
 
+
+
+PROVISION_STEPS = [
+    ("ssh","SSH připojení"), ("preflight","Pre-flight kontrola"), ("lan","LAN konfigurace"),
+    ("wg_key","WireGuard klíče"), ("wg_peer","Registrace peeru na MAIN"),
+    ("wg_start","Spuštění WireGuardu"), ("wg_handshake","WireGuard handshake"),
+    ("wg_forward","WireGuard forwarding"), ("data_disk","DATA disk /srv"),
+    ("docker","Docker + Portainer Agent"), ("firewall","Management firewall"),
+    ("main_test","MAIN → Portainer Agent"), ("portainer","Registrace v Portaineru")
+]
+
+@app.post("/api/provisioning/server/stream")
+async def provision_server_stream(request: Request, session=Depends(require_csrf)):
+    if "admin" not in user_permissions(session.get("user","")):
+        raise HTTPException(403,"Permission denied")
+    payload=await request.json()
+    q=queue.Queue()
+    loop=asyncio.get_running_loop()
+    def emit(step,status="done",detail=""):
+        q.put({"type":"progress","step":step,"status":status,"detail":detail})
+    def worker():
+        try:
+            result=_provision(payload,emit)
+            q.put({"type":"core_done","result":result})
+        except Exception as exc:
+            q.put({"type":"error","detail":"Provisioning selhal: "+str(exc)})
+    import threading
+    threading.Thread(target=worker,daemon=True).start()
+
+    async def events():
+        result=None
+        while True:
+            item=await loop.run_in_executor(None,q.get)
+            if item["type"]=="core_done":
+                result=item["result"]
+                break
+            yield json.dumps(item,ensure_ascii=False)+"\n"
+            if item["type"]=="error":
+                return
+        try:
+            yield json.dumps({"type":"progress","step":"portainer","status":"running","detail":"Registruji environment v Portaineru…"},ensure_ascii=False)+"\n"
+            async with client() as cc:
+                r=await cc.post("/api/endpoints",data={"Name":result["name"],"EndpointCreationType":"2","URL":"tcp://"+result["management_ip"]+":9001","TLS":"true","TLSSkipVerify":"true","TLSSkipClientVerify":"true"})
+            if r.status_code not in (200,201,409):
+                yield json.dumps({"type":"error","step":"portainer","detail":"Portainer registration failed: "+r.text},ensure_ascii=False)+"\n"; return
+            detail="Portainer environment registered" if r.status_code in (200,201) else "Portainer environment already exists"
+            result["steps"].append(detail)
+            yield json.dumps({"type":"progress","step":"portainer","status":"done","detail":detail},ensure_ascii=False)+"\n"
+            yield json.dumps({"type":"result","result":result},ensure_ascii=False)+"\n"
+        except Exception as exc:
+            yield json.dumps({"type":"error","step":"portainer","detail":"WG je funkční, ale registrace do Portaineru selhala: "+str(exc)},ensure_ascii=False)+"\n"
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(events(),media_type="application/x-ndjson",headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
 
 @app.post("/api/provisioning/server")
 async def provision_server(request: Request, session=Depends(require_csrf)):
