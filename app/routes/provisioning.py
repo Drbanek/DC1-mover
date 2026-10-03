@@ -49,13 +49,15 @@ def _provision(payload):
     lan_ip = str(payload.get("lan_ip") or "").strip()
     mgmt_ip = str(payload.get("management_ip") or "").strip()
     hub_mgmt_ip = str(payload.get("hub_management_ip") or "10.200.0.8").strip()
+    manager_mgmt_ip = str(payload.get("manager_management_ip") or "10.200.0.10").strip()
+    data_disk = str(payload.get("data_disk") or "AUTO").strip()
     hub_endpoint = str(payload.get("hub_endpoint") or "").strip()
     name = str(payload.get("name") or (site + "-" + role)).strip().upper()
     ssh_port = int(payload.get("ssh_port") or 22)
     hub_ssh_port = int(payload.get("hub_ssh_port") or 22)
     if not all((host,user,password,hub_host,hub_user,hub_password,site,lan_ip,mgmt_ip,hub_endpoint)):
         raise ValueError("Chybí povinné provisioning údaje.")
-    ipaddress.ip_address(host); ipaddress.ip_address(lan_ip); ipaddress.ip_address(mgmt_ip); ipaddress.ip_address(hub_mgmt_ip)
+    ipaddress.ip_address(host); ipaddress.ip_address(lan_ip); ipaddress.ip_address(mgmt_ip); ipaddress.ip_address(hub_mgmt_ip); ipaddress.ip_address(manager_mgmt_ip)
     if not mgmt_ip.startswith("10.200."):
         raise ValueError("Management IP musí být z overlay 10.200.0.0/16.")
     steps=[]
@@ -133,6 +135,57 @@ systemctl enable --now wg-quick@wg-dsm"""
         if not hs or hs.split()[-1]=="0":
             raise RuntimeError("WireGuard handshake se nepotvrdil.")
         steps.append("WireGuard handshake OK")
+        # The hub routes management traffic between WireGuard peers. Keep this
+        # independent of Docker's FORWARD policy (which is commonly DROP).
+        _run(hub,"sysctl -w net.ipv4.ip_forward=1 >/dev/null; printf 'net.ipv4.ip_forward=1\\n' >/etc/sysctl.d/99-dockerstackmover-wg-forward.conf; iptables -C FORWARD -i wg-dsm -o wg-dsm -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i wg-dsm -o wg-dsm -j ACCEPT",hub_password)
+        steps.append("WireGuard peer forwarding OK")
+        if role == "NODE":
+            diskcmd = """if findmnt -rn -T /srv >/dev/null 2>&1 && [ "$(findmnt -rn -T /srv -o TARGET)" = "/srv" ]; then
+  echo "EXISTING $(findmnt -rn -T /srv -o SOURCE)"
+  exit 0
+fi
+ROOT_SRC=$(findmnt -no SOURCE /)
+ROOT_PARENT=$(lsblk -no PKNAME "$ROOT_SRC" 2>/dev/null || true)
+ROOT_DISK="/dev/$ROOT_PARENT"
+REQUESTED=__DATA_DISK__
+if [ "$REQUESTED" = AUTO ]; then
+  CANDIDATES=""
+  while read -r DEV TYPE; do
+    [ "$TYPE" = disk ] || continue
+    [ "$DEV" = "$ROOT_DISK" ] && continue
+    [ -n "$(lsblk -nrpo MOUNTPOINTS "$DEV" | tr -d '[:space:]')" ] && continue
+    [ -n "$(lsblk -nrpo FSTYPE "$DEV" | tr -d '[:space:]')" ] && continue
+    CANDIDATES="$CANDIDATES $DEV"
+  done < <(lsblk -dpno NAME,TYPE)
+  set -- $CANDIDATES
+  [ "$#" -eq 1 ] || { echo "AUTO DATA disk vyžaduje právě jeden nepoužitý disk; nalezeno: $# ($CANDIDATES)" >&2; exit 41; }
+  DISK="$1"
+else
+  DISK="$REQUESTED"
+fi
+[ -b "$DISK" ] || { echo "DATA disk $DISK neexistuje" >&2; exit 42; }
+[ "$DISK" != "$ROOT_DISK" ] || { echo "Odmítám použít systémový disk $DISK" >&2; exit 43; }
+[ -z "$(lsblk -nrpo MOUNTPOINTS "$DISK" | tr -d '[:space:]')" ] || { echo "DATA disk $DISK obsahuje připojený oddíl" >&2; exit 44; }
+[ -z "$(lsblk -nrpo FSTYPE "$DISK" | tr -d '[:space:]')" ] || { echo "DATA disk $DISK obsahuje filesystem; odmítám automatické smazání" >&2; exit 45; }
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y xfsprogs parted
+wipefs -a "$DISK"
+parted -s "$DISK" mklabel gpt mkpart primary xfs 0% 100%
+partprobe "$DISK"; sleep 2
+PART="$DISK""1"; case "$DISK" in *nvme*|*mmcblk*) PART="$DISK""p1";; esac
+mkfs.xfs -f "$PART"
+mkdir -p /srv
+UUID=$(blkid -s UUID -o value "$PART")
+grep -qE '^[^#]+[[:space:]]+/srv[[:space:]]' /etc/fstab || echo "UUID=$UUID /srv xfs defaults,prjquota 0 2" >>/etc/fstab
+mount /srv
+mkdir -p /srv/stacks
+chown -R root:docker /srv/stacks
+chmod 2775 /srv/stacks
+echo "CREATED $DISK -> $PART -> /srv"
+"""
+            diskcmd = diskcmd.replace("__DATA_DISK__", shlex.quote(data_disk or "AUTO"))
+            disk_result = _run(target,diskcmd,password,900)
+            steps.append("DATA disk OK: "+disk_result.splitlines()[-1])
         docker="""if ! command -v docker >/dev/null; then install -m 0755 -d /etc/apt/keyrings; curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc; chmod a+r /etc/apt/keyrings/docker.asc; . /etc/os-release; echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $VERSION_CODENAME stable" >/etc/apt/sources.list.d/docker.list; apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; fi
 systemctl enable --now docker
 systemctl restart docker
@@ -150,7 +203,8 @@ nft add table inet dockerstackmover-bootstrap
 nft 'add chain inet dockerstackmover-bootstrap input {{ type filter hook input priority -10; policy accept; }}'
 nft add rule inet dockerstackmover-bootstrap input ct state established,related accept
 nft add rule inet dockerstackmover-bootstrap input iifname lo accept
-nft add rule inet dockerstackmover-bootstrap input iifname wg-dsm ip saddr {hub_mgmt_ip} tcp dport '{{ 9001, 9100 }}' accept
+nft add rule inet dockerstackmover-bootstrap input iifname wg-dsm ip saddr {hub_mgmt_ip} tcp dport 9001 accept
+nft add rule inet dockerstackmover-bootstrap input iifname wg-dsm ip saddr {manager_mgmt_ip} tcp dport 9100 accept
 nft add rule inet dockerstackmover-bootstrap input tcp dport '{{ 9001, 9100 }}' drop"""
         _run(target,fw,password)
         steps.append("Management firewall OK")
