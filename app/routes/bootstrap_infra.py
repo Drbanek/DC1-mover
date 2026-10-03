@@ -299,15 +299,34 @@ systemctl enable --now wg-quick@wg-dsm
                        "wg-quick save wg-dsm >/dev/null"
             _run(conn, peer_cmd, password)
 
-            # Activate the host-side MGMT peer through a narrowly scoped helper
-            # mounted by install.sh. The application container never receives
-            # host sudo or the Docker socket.
-            helper = "/host-tools/configure-mgmt-wireguard"
-            if not os.path.exists(helper):
-                raise RuntimeError("MGMT WireGuard helper chybí. Aktualizuj MGMT pomocí aktuálního install.sh.")
-            proc = subprocess.run([helper, hub_pub, wg_endpoint], text=True, capture_output=True, timeout=60)
-            if proc.returncode != 0:
-                raise RuntimeError("MGMT WireGuard aktivace selhala: " + (proc.stderr or proc.stdout)[-300:])
+            # Ask the narrow host-side broker to activate MGMT WireGuard.
+            # A bind-mounted executable would still run inside the container
+            # namespace, so it cannot configure the host. The systemd path
+            # service installed by install.sh performs the privileged action.
+            request_dir = "/host-requests"
+            if not os.path.isdir(request_dir):
+                raise RuntimeError("MGMT WireGuard request bridge chybí. Aktualizuj MGMT pomocí aktuálního install.sh.")
+            request_path = os.path.join(request_dir, "request")
+            result_path = os.path.join(request_dir, "result")
+            try:
+                os.unlink(result_path)
+            except FileNotFoundError:
+                pass
+            tmp_path = request_path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as fh:
+                fh.write(hub_pub + "\n" + wg_endpoint + "\n")
+            os.replace(tmp_path, request_path)
+            broker_result = ""
+            for _ in range(60):
+                time.sleep(0.25)
+                try:
+                    with open(result_path, "r", encoding="utf-8") as fh:
+                        broker_result = fh.read().strip()
+                except FileNotFoundError:
+                    continue
+                break
+            if broker_result != "OK":
+                raise RuntimeError("MGMT WireGuard aktivace selhala: " + (broker_result or "host služba neodpověděla"))
             emit("wireguard", "done", "WG HUB 10.200.0.8 + MGMT 10.200.0.10 připraveny")
 
             emit("portainer", "running", "Instaluji Portainer Server")

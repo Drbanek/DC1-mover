@@ -33,6 +33,41 @@ def endpoint_host_ip(endpoint):
 CAPACITY_AGENT_IMAGE = os.getenv("CAPACITY_AGENT_IMAGE", "ghcr.io/drbanek/dockerstackmover-capacity-agent:latest")
 CAPACITY_AGENT_CONTAINER = "dockerstackmover-capacity-agent"
 
+
+async def ensure_mgmt_wireguard():
+    """Ensure the DSM host owns 10.200.0.10 before NODE health checks."""
+    hub_pub = (setting_get("wg_hub_public_key", "") or "").strip()
+    hub_endpoint = (setting_get("wg_hub_endpoint", "") or "").strip()
+    if not hub_pub or not hub_endpoint:
+        raise RuntimeError("Chybí uložené údaje WireGuard HUBu.")
+    request_dir = "/host-requests"
+    if not os.path.isdir(request_dir):
+        raise RuntimeError("MGMT WireGuard request bridge chybí. Aktualizuj MGMT pomocí aktuálního install.sh.")
+    request_path = os.path.join(request_dir, "request")
+    result_path = os.path.join(request_dir, "result")
+    try:
+        os.unlink(result_path)
+    except FileNotFoundError:
+        pass
+    tmp_path = request_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        fh.write(hub_pub + "\n" + hub_endpoint + "\n")
+    os.replace(tmp_path, request_path)
+    last = ""
+    for _ in range(60):
+        await asyncio.sleep(0.25)
+        try:
+            with open(result_path, "r", encoding="utf-8") as fh:
+                last = fh.read().strip()
+        except FileNotFoundError:
+            continue
+        if last == "OK":
+            return
+        if last.startswith("ERROR"):
+            raise RuntimeError("MGMT WireGuard aktivace selhala: " + last[5:].strip())
+    raise RuntimeError("MGMT WireGuard aktivace vypršela bez odpovědi host služby.")
+
+
 async def _agent_container(endpoint_id):
     r = await docker_request(endpoint_id, "GET", "/containers/" + CAPACITY_AGENT_CONTAINER + "/json")
     return r.json() if r.status_code == 200 else None
@@ -236,6 +271,10 @@ async def prepare_node_stream(endpoint_id: int, session=Depends(require_csrf)):
             if not host_ip:
                 yield ev("endpoint","error","Host IP se nepodařilo zjistit."); return
             yield ev("endpoint","done","Endpoint OK · "+host_ip)
+
+            yield ev("mgmt_wireguard","running","Ověřuji/aktivuji MGMT WireGuard 10.200.0.10…")
+            await ensure_mgmt_wireguard()
+            yield ev("mgmt_wireguard","done","MGMT WireGuard 10.200.0.10 aktivní")
 
             yield ev("migration","running","Povoluji endpoint pro migrace…")
             save_endpoint_setting(endpoint_id, True, settings.get("host_ip", ""), settings.get("site", ""),

@@ -75,6 +75,49 @@ ip -4 addr show dev wg-dsm | grep -q '10.200.0.10/16'
 DSMHELPER
 chmod 755 /opt/dockerstackmover-host-tools/configure-mgmt-wireguard
 
+# Narrow privilege bridge for the app container. The container can only submit
+# a two-line WireGuard request; this host service validates it and invokes the
+# fixed helper. No Docker socket, sudo, or host namespace is exposed.
+install -d -m 0755 /opt/dockerstackmover-host-requests
+cat >/usr/local/sbin/dockerstackmover-wg-request-handler <<'DSMBROKER'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+REQ=/opt/dockerstackmover-host-requests/request
+RES=/opt/dockerstackmover-host-requests/result
+[[ -f "$REQ" ]] || exit 0
+mapfile -t LINES <"$REQ"
+rm -f "$REQ"
+if [[ "${#LINES[@]}" -ne 2 ]]; then
+  printf 'ERROR invalid request\n' >"$RES"; exit 0
+fi
+HUB_PUB="${LINES[0]}"
+ENDPOINT="${LINES[1]}"
+if OUT=$(/opt/dockerstackmover-host-tools/configure-mgmt-wireguard "$HUB_PUB" "$ENDPOINT" 2>&1); then
+  printf 'OK\n' >"$RES"
+else
+  printf 'ERROR %s\n' "${OUT: -300}" >"$RES"
+fi
+DSMBROKER
+chmod 0755 /usr/local/sbin/dockerstackmover-wg-request-handler
+cat >/etc/systemd/system/dockerstackmover-wg-request.service <<'EOF'
+[Unit]
+Description=DockerStackMover MGMT WireGuard request handler
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/dockerstackmover-wg-request-handler
+EOF
+cat >/etc/systemd/system/dockerstackmover-wg-request.path <<'EOF'
+[Unit]
+Description=Watch DockerStackMover MGMT WireGuard requests
+[Path]
+PathExists=/opt/dockerstackmover-host-requests/request
+Unit=dockerstackmover-wg-request.service
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now dockerstackmover-wg-request.path
+
 # Prepare the application first on the current address. The permanent IP
 # switch is intentionally the final step because an SSH session can be lost.
 install -d -m 0750 /opt/dockerstackmover
@@ -93,6 +136,7 @@ services:
     volumes:
       - data:/data
       - /opt/dockerstackmover-host-tools:/host-tools:ro
+      - /opt/dockerstackmover-host-requests:/host-requests
 volumes:
   data:
 EOF
