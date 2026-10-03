@@ -11,7 +11,7 @@ function bindEnterActions(){
 }
 document.addEventListener("DOMContentLoaded",bindEnterActions);
 
-async function login(){const error=document.getElementById("loginError");error.textContent="";try{const response=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:document.getElementById("loginUser").value,password:document.getElementById("loginPass").value})});const raw=await response.text();if(!response.ok)throw new Error(raw);document.getElementById("loginOverlay").style.display="none";if(!await restoreSession())throw new Error("Session restore failed");if(hasPerm("admin")){await loadEndpointSettings();await loadAppSettings();await loadUsers();await loadMaintenance();await loadBackups()}if(hasPerm("migrations")){await loadStacks();await loadHistory()}if(hasPerm("dashboard_read")){await loadReadiness();await loadCapacity();await loadCluster()}}catch(e){error.textContent="Přihlášení se nezdařilo."}}
+async function login(){const error=document.getElementById("loginError");error.textContent="";try{const response=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:document.getElementById("loginUser").value,password:document.getElementById("loginPass").value})});const raw=await response.text();if(!response.ok)throw new Error(raw);document.getElementById("loginOverlay").style.display="none";if(!await restoreSession())throw new Error("Session restore failed");if(hasPerm("admin")){await loadEndpointSettings();await loadAppSettings();await loadUsers();await loadMaintenance();await loadBackups();await loadUpdateStatus()}if(hasPerm("migrations")){await loadStacks();await loadHistory()}if(hasPerm("dashboard_read")){await loadReadiness();await loadCapacity();await loadCluster()}}catch(e){error.textContent="Přihlášení se nezdařilo."}}
 async function restoreSession(){try{const r=await fetch("/api/session",{cache:"no-store"});if(!r.ok)return false;const data=await r.json();csrfToken=data.csrf;currentUser=data.user||"";currentPermissions=data.permissions||[];applyLanguage(data.language||"cs");applyPermissions();document.getElementById("loginOverlay").style.display="none";return true}catch(_){return false}}
 let selectedStackId=null;let selectedDetail=null;
 function esc(value){const div=document.createElement("div");div.textContent=value==null?"":String(value);return div.innerHTML}
@@ -243,4 +243,28 @@ async function removeEndpoint(ep,button){
   await loadEndpointSettings();await loadReadiness();await loadCapacity();await loadCluster();
  }catch(e){alert("Odebrání serveru selhalo: "+e.message);if(state)state.textContent="Odebrání selhalo"}
  finally{button.disabled=false}
+}
+
+
+async function loadUpdateStatus(){
+ const box=document.getElementById("updateStatus"),btn=document.getElementById("updateButton");if(!box)return;
+ box.innerHTML="Ověřuji aktuální verzi…";if(btn){btn.style.display="none";btn.disabled=false}
+ try{
+  const r=await fetch("/api/system/update",{cache:"no-store",credentials:"same-origin"}),d=await r.json();
+  if(!r.ok)throw new Error(d.detail||("HTTP "+r.status));
+  let state=d.error?"Nelze ověřit nejnovější verzi":(d.update_available?"Je dostupná aktualizace":"Používáš aktuální verzi");
+  box.innerHTML="<div><strong>Aktuální verze:</strong> "+esc(d.current||"neznámá")+"</div><div><strong>Nejnovější verze:</strong> "+esc(d.latest||"nelze ověřit")+"</div><div style='margin-top:6px'>"+esc(state)+"</div>"+(!d.updater_ready?"<div class='error' style='margin-top:6px'>Webový updater ještě není aktivní v hostitelské instalaci. Jednorázově bude potřeba aktualizovat instalační compose.</div>":"");
+  if(btn&&d.update_available&&d.updater_ready)btn.style.display="";
+ }catch(e){box.innerHTML="<span class='error'>Kontrola aktualizace selhala: "+esc(e.message||e)+"</span>"}
+}
+async function runSystemUpdate(){
+ const btn=document.getElementById("updateButton"),box=document.getElementById("updateStatus");if(!btn||!box)return;
+ if(!confirm("Aktualizovat DockerStackMover na nejnovější verzi? Web se během restartu krátce odpojí."))return;
+ btn.disabled=true;box.innerHTML="Spouštím aktualizaci…";
+ try{
+  const r=await fetch("/api/system/update",{method:"POST",headers:{"X-CSRF-Token":csrfToken},credentials:"same-origin"}),d=await r.json();
+  if(!r.ok)throw new Error(d.detail||("HTTP "+r.status));
+  box.innerHTML="Aktualizace na "+esc(d.target)+" byla spuštěna. Čekám na restart…";
+  setTimeout(()=>location.reload(),12000);
+ }catch(e){box.innerHTML="<span class='error'>Aktualizace selhala: "+esc(e.message||e)+"</span>";btn.disabled=false}
 }
