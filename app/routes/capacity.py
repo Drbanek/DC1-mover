@@ -105,11 +105,11 @@ async def install_capacity_agent(endpoint_id: int, session=Depends(require_csrf)
 
 
 
-async def agent_firewall(endpoint_id, method="GET", payload=None):
+async def agent_firewall(endpoint_id, method="GET", payload=None, suffix=""):
     settings=get_endpoint_settings().get(int(endpoint_id),{}); url=(settings.get("agent_url") or "").rstrip("/"); token=settings.get("agent_token") or ""
     if not url or not token: raise RuntimeError("Node Agent is not configured")
     async with httpx.AsyncClient(timeout=8) as hc:
-        r=await hc.request(method,url+"/firewall",headers={"X-Agent-Token":token},json=payload)
+        r=await hc.request(method,url+"/firewall"+suffix,headers={"X-Agent-Token":token},json=payload)
     if r.status_code != 200: raise RuntimeError("Firewall Agent HTTP "+str(r.status_code)+": "+r.text[:300])
     return r.json()
 
@@ -122,7 +122,26 @@ async def firewall_apply(endpoint_id:int,request:Request,session=Depends(require
     if "admin" not in user_permissions(session.get("user","")): raise HTTPException(403,"Permission denied")
     p=await request.json(); sources=[str(x).strip() for x in p.get("management_sources",[]) if str(x).strip()]
     ports=p.get("management_ports") or [9001,9100]
-    return await agent_firewall(endpoint_id,"PUT",{"management_sources":sources,"management_ports":ports})
+    timeout=max(30,min(int(p.get("confirm_timeout") or 90),300))
+    result=await agent_firewall(endpoint_id,"PUT",{"management_sources":sources,"management_ports":ports,"confirm_timeout":timeout})
+    txid=result.get("transaction_id")
+    if not txid: return result
+    # Verify through the same central path that will manage this node. If the
+    # agent cannot be reached after applying the rules, do not confirm it.
+    await asyncio.sleep(1)
+    verify=await agent_firewall(endpoint_id)
+    result["verified_after_apply"]=True
+    return result
+
+@app.post("/api/endpoints/{endpoint_id}/firewall/confirm/{txid}")
+async def firewall_confirm(endpoint_id:int,txid:str,session=Depends(require_csrf)):
+    if "admin" not in user_permissions(session.get("user","")): raise HTTPException(403,"Permission denied")
+    return await agent_firewall(endpoint_id,"POST",suffix="/confirm/"+txid)
+
+@app.post("/api/endpoints/{endpoint_id}/firewall/rollback/{txid}")
+async def firewall_rollback(endpoint_id:int,txid:str,session=Depends(require_csrf)):
+    if "admin" not in user_permissions(session.get("user","")): raise HTTPException(403,"Permission denied")
+    return await agent_firewall(endpoint_id,"POST",suffix="/rollback/"+txid)
 
 async def node_readiness(endpoint):
     """Return an actionable readiness report for any Portainer endpoint."""
