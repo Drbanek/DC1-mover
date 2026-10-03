@@ -1,4 +1,4 @@
-import os, shutil, json, subprocess, ipaddress
+import os, shutil, json, subprocess, ipaddress, threading, time, uuid
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
@@ -21,6 +21,28 @@ def nft(args, stdin=None):
 class FirewallPolicy(BaseModel):
     management_sources: list[str]
     management_ports: list[int] = [9001, 9100]
+    confirm_timeout: int = 90
+
+_pending = {}
+_pending_lock = threading.Lock()
+
+def managed_snapshot():
+    p=subprocess.run(["nft","-j","list","table","inet","dockerstackmover"],capture_output=True,text=True,timeout=10)
+    if p.returncode != 0: return None
+    try: return json.loads(p.stdout)
+    except Exception: return None
+
+def restore_snapshot(snapshot):
+    subprocess.run(["nft","delete","table","inet","dockerstackmover"],capture_output=True,text=True)
+    if snapshot:
+        nft(["-j","-f","-"],json.dumps(snapshot))
+
+def schedule_rollback(txid, seconds):
+    def worker():
+        time.sleep(seconds)
+        with _pending_lock: tx=_pending.pop(txid,None)
+        if tx: restore_snapshot(tx["before"])
+    threading.Thread(target=worker,daemon=True).start()
 
 def normalize_policy(p):
     sources=[]
@@ -58,6 +80,8 @@ def firewall(x_agent_token: str | None = Header(default=None)):
 @app.put("/firewall")
 def firewall_apply(policy: FirewallPolicy, x_agent_token: str | None = Header(default=None)):
     auth(x_agent_token); sources,ports=normalize_policy(policy)
+    if any(ipaddress.ip_address(x).version != 4 for x in sources): raise HTTPException(400,"IPv4 management sources only")
+    before=managed_snapshot(); timeout=max(30,min(int(policy.confirm_timeout or 90),300))
     src=", ".join(sources); pts=", ".join(str(x) for x in ports)
     rules=f"""table inet dockerstackmover {{
  chain input {{
@@ -68,6 +92,28 @@ def firewall_apply(policy: FirewallPolicy, x_agent_token: str | None = Header(de
   tcp dport {{ {pts} }} drop
  }}
 }}"""
+    check=subprocess.run(["nft","-c","-f","-"],input=rules,text=True,capture_output=True,timeout=10)
+    if check.returncode: raise HTTPException(400,(check.stderr or check.stdout)[:500])
     subprocess.run(["nft","delete","table","inet","dockerstackmover"],capture_output=True,text=True)
-    nft(["-f","-"],rules)
-    return {"ok":True,"management_sources":sources,"management_ports":ports}
+    try: nft(["-f","-"],rules)
+    except Exception:
+        restore_snapshot(before); raise
+    txid=uuid.uuid4().hex
+    with _pending_lock: _pending[txid]={"before":before}
+    schedule_rollback(txid,timeout)
+    return {"ok":True,"pending_confirmation":True,"transaction_id":txid,"confirm_timeout":timeout,"management_sources":sources,"management_ports":ports}
+
+@app.post("/firewall/confirm/{txid}")
+def firewall_confirm(txid: str, x_agent_token: str | None = Header(default=None)):
+    auth(x_agent_token)
+    with _pending_lock: tx=_pending.pop(txid,None)
+    if not tx: raise HTTPException(409,"Firewall change is no longer pending")
+    return {"ok":True,"confirmed":True}
+
+@app.post("/firewall/rollback/{txid}")
+def firewall_rollback(txid: str, x_agent_token: str | None = Header(default=None)):
+    auth(x_agent_token)
+    with _pending_lock: tx=_pending.pop(txid,None)
+    if not tx: raise HTTPException(409,"Firewall change is no longer pending")
+    restore_snapshot(tx["before"])
+    return {"ok":True,"rolled_back":True}
