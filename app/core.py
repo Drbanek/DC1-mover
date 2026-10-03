@@ -266,20 +266,14 @@ async def docker_get(endpoint_id, path, params=None, allowed=(200,)):
         return r
 
 async def docker_request(endpoint_id, method, path, **kwargs):
-    # httpx sends Content-Length: 0 for body-less POST requests. Docker's
-    # /containers/{id}/start endpoint rejects any request body on API >= 1.24,
-    # so send a raw request without content headers when no body was requested.
     async with client() as c:
         url = "/api/endpoints/" + str(endpoint_id) + "/docker" + path
         if method.upper() == "POST" and path.endswith("/start") and "json" not in kwargs and "content" not in kwargs and "data" not in kwargs and "files" not in kwargs:
-            # Docker API >= 1.24 rejects any request body on container start.
-            # httpx may add Content-Length: 0 for POST, which Portainer forwards in a
-            # way newer Docker daemons interpret as a body. Build the request manually
-            # and strip entity headers completely.
-            request = c.build_request(method, url, **kwargs)
-            request.headers.pop("Content-Length", None)
-            request.headers.pop("Content-Type", None)
-            request.headers.pop("Transfer-Encoding", None)
+            # Portainer's reverse proxy can turn a header-only POST into a request
+            # Docker treats as a non-empty body. Use the Docker API compatibility
+            # query endpoint: POST is still body-less, with all data in the URL.
+            params = kwargs.pop("params", None)
+            request = httpx.Request("POST", str(c.base_url).rstrip("/") + url, params=params, headers={"X-API-Key": portainer_config()[1]})
             return await c.send(request)
         return await c.request(method, url, **kwargs)
 
