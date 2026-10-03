@@ -21,14 +21,19 @@ def _ssh(host, port, username, password):
 def _run(c, command, password=None, timeout=300):
     if password is not None:
         command = "sudo -S -p '' bash -lc " + shlex.quote(command)
-    stdin, stdout, stderr = c.exec_command(command, timeout=timeout, get_pty=password is not None)
+    # sudo -S does not need a PTY on Ubuntu. A PTY echoes the password into the
+    # terminal stream and can leak/control-character-corrupt multiline commands.
+    stdin, stdout, stderr = c.exec_command(command, timeout=timeout, get_pty=False)
     if password is not None:
         stdin.write(password + "\n"); stdin.flush()
     out = stdout.read().decode("utf-8", "replace")
     err = stderr.read().decode("utf-8", "replace")
     rc = stdout.channel.recv_exit_status()
     if rc:
-        raise RuntimeError((err or out or ("command failed: " + str(rc))).strip())
+        message = (err or out or ("command failed: " + str(rc))).strip()
+        if password:
+            message = message.replace(password, "[REDACTED]")
+        raise RuntimeError(message)
     return out.strip()
 
 
