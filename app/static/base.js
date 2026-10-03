@@ -1,6 +1,16 @@
 let currentUser="";let currentPermissions=[];
 function showTab(name,button){document.querySelectorAll(".tabpage").forEach(x=>x.classList.remove("active"));document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));const page=document.getElementById("tab-"+name);if(page)page.classList.add("active");if(button)button.classList.add("active")}
 let csrfToken = "";
+function bindEnterActions(){
+ const loginPass=document.getElementById("loginPass");
+ if(loginPass&&!loginPass.dataset.enterBound){loginPass.dataset.enterBound="1";loginPass.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();login()}})}
+ const setup=document.getElementById("setupOverlay");
+ if(setup&&!setup.dataset.enterBound){setup.dataset.enterBound="1";setup.addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target&&e.target.tagName!=="TEXTAREA"){e.preventDefault();runSetup()}})}
+ const pwdNew=document.getElementById("pwdNew");
+ if(pwdNew&&!pwdNew.dataset.enterBound){pwdNew.dataset.enterBound="1";pwdNew.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();changePassword()}})}
+}
+document.addEventListener("DOMContentLoaded",bindEnterActions);
+
 async function login(){const error=document.getElementById("loginError");error.textContent="";try{const response=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:document.getElementById("loginUser").value,password:document.getElementById("loginPass").value})});const raw=await response.text();if(!response.ok)throw new Error(raw);document.getElementById("loginOverlay").style.display="none";if(!await restoreSession())throw new Error("Session restore failed");if(hasPerm("admin")){await loadEndpointSettings();await loadAppSettings();await loadUsers();await loadMaintenance();await loadBackups()}if(hasPerm("migrations")){await loadStacks();await loadHistory()}if(hasPerm("dashboard_read")){await loadReadiness();await loadCapacity();await loadCluster()}}catch(e){error.textContent="Přihlášení se nezdařilo."}}
 async function restoreSession(){try{const r=await fetch("/api/session",{cache:"no-store"});if(!r.ok)return false;const data=await r.json();csrfToken=data.csrf;currentUser=data.user||"";currentPermissions=data.permissions||[];applyLanguage(data.language||"cs");applyPermissions();document.getElementById("loginOverlay").style.display="none";return true}catch(_){return false}}
 let selectedStackId=null;let selectedDetail=null;
