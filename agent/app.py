@@ -41,15 +41,19 @@ def capacity(x_agent_token: str | None = Header(default=None)):
 @app.get("/firewall")
 def firewall(x_agent_token: str | None = Header(default=None)):
     auth(x_agent_token)
+    full=subprocess.run(["nft","-j","list","ruleset"],capture_output=True,text=True,timeout=10)
+    if full.returncode != 0: raise HTTPException(500,(full.stderr or full.stdout)[:500])
+    try: full_ruleset=json.loads(full.stdout)
+    except Exception: full_ruleset={"raw":full.stdout}
     p=subprocess.run(["nft","-j","list","table","inet","dockerstackmover"],capture_output=True,text=True,timeout=10)
     if p.returncode != 0:
         # A freshly installed agent has no managed table yet. This is a valid,
         # unconfigured state; the UI can then offer to apply the policy.
         if "No such file or directory" in (p.stderr or ""):
-            return {"managed":False,"configured":False,"message":"Firewall policy not configured yet"}
+            return {"managed":False,"configured":False,"message":"Firewall policy not configured yet","full_ruleset":full_ruleset}
         raise HTTPException(500,(p.stderr or p.stdout)[:500])
-    try: return {"managed":True,"configured":True,"ruleset":json.loads(p.stdout)}
-    except Exception: return {"managed":True,"configured":True,"raw":p.stdout}
+    try: return {"managed":True,"configured":True,"ruleset":json.loads(p.stdout),"full_ruleset":full_ruleset}
+    except Exception: return {"managed":True,"configured":True,"raw":p.stdout,"full_ruleset":full_ruleset}
 
 @app.put("/firewall")
 def firewall_apply(policy: FirewallPolicy, x_agent_token: str | None = Header(default=None)):
