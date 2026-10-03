@@ -176,6 +176,67 @@ async def sync_stack_proxy(detail, endpoint_id):
     return {"configured": True, "site": site, "proxy_endpoint_id": proxy_id, "lan_ip": lan_ip, "file": filename, "domains": len(domains)}
 
 
+async def activate_stack_proxy_tls(detail, endpoint_id):
+    """Reload Traefik only after public DNS points at the target site.
+
+    Rewriting the same dynamic config is not sufficient after a failed ACME
+    authorization because Traefik can retain the failed attempt. Restarting the
+    target site's Traefik keeps acme.json intact and triggers a clean retry.
+    """
+    settings = get_endpoint_settings()
+    node = settings.get(int(endpoint_id), {})
+    site = (node.get("site") or "").strip().upper()
+    proxy_id = _site_proxy(site)
+    r = await docker_request(proxy_id, "POST", "/containers/traefik/restart", params={"t": 10})
+    if r.status_code not in (204, 304):
+        raise RuntimeError("Traefik restart failed: HTTP " + str(r.status_code) + " " + r.text[:300])
+    deadline = asyncio.get_running_loop().time() + 60
+    last = "Traefik se ještě nespustil"
+    while asyncio.get_running_loop().time() < deadline:
+        state = await docker_request(proxy_id, "GET", "/containers/traefik/json")
+        if state.status_code == 200 and (state.json().get("State") or {}).get("Running"):
+            return {"ok": True, "proxy_endpoint_id": proxy_id}
+        last = "HTTP " + str(state.status_code)
+        await asyncio.sleep(2)
+    raise RuntimeError("Traefik restart timeout: " + last)
+
+
+async def verify_stack_proxy_tls(detail, endpoint_id, timeout=120):
+    """Verify that the target Traefik serves a certificate valid for every domain."""
+    settings = get_endpoint_settings()
+    node = settings.get(int(endpoint_id), {})
+    site = (node.get("site") or "").strip().upper()
+    proxy_id = _site_proxy(site)
+    proxy = settings.get(int(proxy_id), {})
+    proxy_lan_ip = (proxy.get("lan_ip") or "").strip()
+    if not proxy_lan_ip:
+        raise RuntimeError("PROXY endpoint nemá LAN IP pro lokální TLS ověření")
+    hosts = [str(d.get("host") or "").strip().lower().rstrip(".") for d in (detail.get("domains") or []) if d.get("host")]
+    if not hosts:
+        return {"ok": True, "domains": 0}
+    # Run openssl on the PROXY host network so verification never depends on
+    # hairpin NAT or the local resolver. verify_hostname validates SAN/CN.
+    deadline = asyncio.get_running_loop().time() + timeout
+    pending = list(hosts)
+    while asyncio.get_running_loop().time() < deadline:
+        failed = []
+        for host in hosts:
+            cmd = (
+                'apk add --no-cache openssl >/dev/null 2>&1; '
+                'printf "" | openssl s_client -connect ' + proxy_lan_ip + ':443 -servername ' + host +
+                ' -verify_hostname ' + host + ' -verify_return_error 2>/dev/null | grep -q "Verify return code: 0 (ok)"'
+            )
+            try:
+                await _run_proxy_helper(proxy_id, cmd, host_network=True)
+            except Exception:
+                failed.append(host)
+        if not failed:
+            return {"ok": True, "domains": len(hosts)}
+        pending = failed
+        await asyncio.sleep(5)
+    raise RuntimeError("SSL certificate timeout after " + str(timeout) + " s: " + ", ".join(pending))
+
+
 async def remove_stack_proxy(stack_name, site):
     if not site:
         return
