@@ -19,7 +19,8 @@ async def bootstrap_portainer(request: Request, session=Depends(require_csrf)):
     password = str(p.get("ssh_password") or "")
     site = str(p.get("site") or "MAIN").strip().upper()
     lan_ip = str(p.get("lan_ip") or host).strip()
-    wg_endpoint = str(p.get("wg_endpoint") or (lan_ip + ":51820")).strip()\n    public_ip = str(p.get("public_ip") or "").strip()
+    wg_endpoint = str(p.get("wg_endpoint") or (lan_ip + ":51820")).strip()
+    public_ip = str(p.get("public_ip") or "").strip()
     ssh_port = int(p.get("ssh_port") or 22)
     if not host or not user or not password or not lan_ip:
         raise HTTPException(400, "Vyplň SSH adresu, uživatele, heslo a LAN IP Portaineru.")
@@ -120,7 +121,8 @@ exit 51
     setting_set("main_site", site)
     setting_set("wg_hub_lan_ip", lan_ip)
     setting_set("wg_hub_endpoint", wg_endpoint)
-    setting_set("wg_hub_public_key", hub_pub)\n    setting_set("main_public_ip", public_ip)
+    setting_set("wg_hub_public_key", hub_pub)
+    setting_set("main_public_ip", public_ip)
     return {
         "ok": True,
         "site": site,
