@@ -198,30 +198,67 @@ async function provisionServer(){
 
 async function bootstrapFirstPortainer(){
  const b=document.getElementById("bootButton"),state=document.getElementById("bootState");
- const p={site:document.getElementById("bootSite").value,public_ip:document.getElementById("bootPublicIp").value,host:document.getElementById("bootHost").value,lan_ip:document.getElementById("bootLanIp").value,ssh_user:document.getElementById("bootUser").value,ssh_password:document.getElementById("bootPassword").value,wg_endpoint:document.getElementById("bootWgEndpoint").value};
- if(!p.site||!p.host||!p.lan_ip||!p.ssh_user||!p.ssh_password){state.className="error";state.textContent="Vyplň lokalitu, SSH/LAN adresu a SSH přihlášení.";return}
- if(!p.wg_endpoint)p.wg_endpoint=p.lan_ip+":51820";
- if(!confirm("Připravit "+p.site+"-PORTAINER na "+p.host+"?\n\nNainstaluje se Docker, Portainer Server a centrální WireGuard HUB."))return;
- b.disabled=true;state.className="muted";state.textContent="Připravuji PORTAINER a WireGuard HUB… první instalace může několik minut trvat.";
+ const p={site:document.getElementById("bootSite").value.trim(),host:document.getElementById("bootHost").value.trim(),ssh_user:document.getElementById("bootUser").value.trim(),ssh_password:document.getElementById("bootPassword").value};
+ if(!p.site||!p.host||!p.ssh_user||!p.ssh_password){state.className="error";state.textContent="Vyplň název lokality, SSH adresu, uživatele a heslo.";return}
+ if(!confirm("Připravit první infrastrukturu "+p.site.toUpperCase()+" na serveru "+p.host+"?\n\nDockerStackMover automaticky nastaví PORTAINER na .8, Docker, WireGuard HUB a Portainer Server."))return;
+
+ const steps=[
+  ["ssh","SSH připojení"],
+  ["ubuntu","Kontrola Ubuntu"],
+  ["network","Síťová konfigurace"],
+  ["hostname","Hostname"],
+  ["docker","Docker"],
+  ["wireguard","WireGuard HUB 10.200.0.8"],
+  ["portainer","Portainer Server"],
+  ["lan","LAN IP .8"],
+  ["api","Inicializace Portainer API"],
+  ["save","Uložení infrastruktury"]
+ ];
+ state.className="";state.innerHTML='<div style="font-weight:700;margin-bottom:8px">Příprava '+esc(p.site.toUpperCase())+'-PORTAINER</div>'+
+  steps.map(([id,label])=>'<div id="bootStep-'+id+'" style="padding:4px 0"><span class="bootMark">○</span> '+esc(label)+'<span class="muted bootDetail"></span></div>').join('')+
+  '<div id="bootProgress" class="muted" style="margin-top:10px">0 / '+steps.length+' hotovo</div>';
+ let done=new Set();
+ function update(step,status,detail){
+   const row=document.getElementById("bootStep-"+step);if(!row)return;
+   const mark=row.querySelector(".bootMark"),d=row.querySelector(".bootDetail");
+   if(status==="running"){mark.textContent="⟳";row.style.fontWeight="600"}
+   else if(status==="done"){mark.textContent="✓";row.style.color="#86efac";row.style.fontWeight="";done.add(step)}
+   else if(status==="error"){mark.textContent="✕";row.style.color="#fca5a5";row.style.fontWeight="600"}
+   if(detail)d.textContent=" · "+detail;
+   document.getElementById("bootProgress").textContent=done.size+" / "+steps.length+" hotovo";
+ }
+ b.disabled=true;
  try{
-  const r=await fetch("/api/bootstrap/portainer",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":csrfToken},body:JSON.stringify(p)});
-  const raw=await r.text();if(!r.ok)throw new Error(raw);const d=JSON.parse(raw);
-  state.className="ready";state.innerHTML="✓ PORTAINER + WG HUB připraven<br>Portainer: "+esc(d.portainer_url)+"<br>WG: "+esc(d.hub_management_ip)+" · "+esc(d.wg_endpoint)+"<br><strong>Jednorázově si ulož Portainer admin heslo:</strong> <code>"+esc(d.portainer_admin_password)+"</code>";
+  const r=await fetch("/api/bootstrap/portainer/stream",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":csrfToken},body:JSON.stringify(p)});
+  if(!r.ok){const raw=await r.text();throw new Error(raw)}
+  const reader=r.body.getReader(),decoder=new TextDecoder();let buf="",result=null;
+  while(true){
+   const {value,done:streamDone}=await reader.read();if(streamDone)break;
+   buf+=decoder.decode(value,{stream:true});const lines=buf.split("\n");buf=lines.pop();
+   for(const line of lines){
+    if(!line.trim())continue;
+    const e=JSON.parse(line);
+    if(e.type==="progress")update(e.step,e.status||"done",e.detail||"");
+    else if(e.type==="error"){update(e.step||"api","error",e.detail||"");throw new Error(e.detail||"Bootstrap selhal")}
+    else if(e.type==="result")result=e.result;
+   }
+  }
+  if(!result)throw new Error("Bootstrap skončil bez výsledku.");
+  const ok=document.createElement("div");ok.className="ready";ok.style.marginTop="14px";
+  ok.innerHTML="✓ První infrastruktura je připravena<br>PORTAINER LAN: <strong>"+esc(result.lan_ip)+"</strong><br>Management: <strong>"+esc(result.hub_management_ip)+"</strong><br>Portainer: "+esc(result.portainer_url)+"<br><strong>Jednorázové Portainer admin heslo:</strong> <code>"+esc(result.portainer_admin_password)+"</code>";
+  state.appendChild(ok);
   document.getElementById("bootPassword").value="";
-  document.getElementById("provSite").value=p.site;
-  document.getElementById("provPublicIp").value=p.public_ip||"";
-  document.getElementById("provHubHost").value=p.lan_ip;
+  document.getElementById("provSite").value=p.site.toUpperCase();
+  document.getElementById("provHubHost").value=result.lan_ip;
   document.getElementById("provHubUser").value=p.ssh_user;
-  document.getElementById("provHubEndpoint").value=p.wg_endpoint;
+  document.getElementById("provHubEndpoint").value=result.wg_endpoint;
   await loadAppSettings();await loadEndpointSettings();
- }catch(e){state.className="error";state.textContent="Bootstrap selhal: "+e.message}
- finally{b.disabled=false}
+ }catch(e){
+  const x=document.createElement("div");x.className="error";x.style.marginTop="12px";x.textContent="Bootstrap selhal: "+e.message;state.appendChild(x);
+ }finally{b.disabled=false}
 }
 document.addEventListener("DOMContentLoaded",()=>{
- const h=document.getElementById("bootHost"),l=document.getElementById("bootLanIp"),w=document.getElementById("bootWgEndpoint"),p=document.getElementById("bootPassword");
- if(h)h.addEventListener("input",()=>{if(l&&!l.dataset.manual)l.value=h.value;if(w&&!w.dataset.manual)w.value=h.value? h.value+":51820":""});
- if(l)l.addEventListener("input",()=>l.dataset.manual="1");
- if(w)w.addEventListener("input",()=>w.dataset.manual="1");
+ const p=document.getElementById("bootPassword");
  if(p)p.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();bootstrapFirstPortainer()}});
 });
 
