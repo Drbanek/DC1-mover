@@ -66,8 +66,8 @@ sysctl -w net.ipv4.ip_forward=1 >/dev/null
 systemctl enable --now wg-quick@wg-dsm
 docker volume create portainer_data >/dev/null
 docker rm -f portainer >/dev/null 2>&1 || true
-docker pull portainer/portainer-ce:2.33.6
-docker run -d --name portainer --restart=always -p 9443:9443 -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:2.33.6 >/dev/null
+docker pull portainer/portainer-ce:2.45.1
+docker run -d --name portainer --restart=always -p 9443:9443 -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:2.45.1 >/dev/null
 for i in $(seq 1 45); do
   curl -kfsS https://127.0.0.1:9443/api/status >/dev/null 2>&1 && exit 0
   sleep 2
