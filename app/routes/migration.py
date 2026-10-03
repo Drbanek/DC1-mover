@@ -138,10 +138,21 @@ async def migration_worker(job):
                     proxy_result = await sync_stack_proxy(detail, source_id)
                     if not proxy_result.get("configured"):
                         raise RuntimeError("Rollback proxy restore did not produce a Traefik configuration")
-                if target_proxy_configured and target_site and target_site != source_site:
-                    await remove_stack_proxy(detail["stack"]["name"], target_site)
+                rollback_errors = []
+                # DNS is the traffic switch: restore it first. Cleanup failures must
+                # never prevent DNS rollback.
                 for change in reversed(dns_changes):
-                    await vas_update_a_record(change["zone"], change["record_id"], change["host"], change["old_content"], change["ttl"])
+                    try:
+                        await vas_update_a_record(change["zone"], change["record_id"], change["host"], change["old_content"], change["ttl"])
+                    except Exception as dns_exc:
+                        rollback_errors.append("DNS " + change["host"] + ": " + str(dns_exc))
+                if target_proxy_configured and target_site and target_site != source_site:
+                    try:
+                        await remove_stack_proxy(detail["stack"]["name"], target_site)
+                    except Exception as proxy_exc:
+                        rollback_errors.append("target PROXY cleanup: " + str(proxy_exc))
+                if rollback_errors:
+                    raise RuntimeError("Rollback částečně selhal: " + " · ".join(rollback_errors))
                 job_step(job, "Rollback zdroje", "ok", "Zdrojový stack byl znovu spuštěn" + (" a DNS vráceno" if dns_changes else ""))
             except Exception as rollback_exc: job_step(job, "Rollback zdroje", "error", "Rollback selhal: " + str(rollback_exc))
         job["status"] = "failed"; persist_job(job); release_stack_lock(job["stack_id"], job["id"])
