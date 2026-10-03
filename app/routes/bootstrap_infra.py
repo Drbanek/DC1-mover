@@ -7,7 +7,7 @@ import shlex
 import httpx
 from fastapi import Depends, HTTPException, Request
 
-from ..core import app, require_csrf, user_permissions, setting_set
+from ..core import app, current_session, require_csrf, user_permissions, setting_set
 from .provisioning import _ssh, _run
 
 
@@ -139,7 +139,7 @@ exit 51
 
 
 @app.get("/api/bootstrap/discovery")
-async def bootstrap_discovery(session=Depends(require_csrf)):
+async def bootstrap_discovery(session=Depends(current_session)):
     """Find SSH-capable hosts in the MGMT LAN without trying credentials."""
     if "admin" not in user_permissions(session.get("user", "")):
         raise HTTPException(403, "Permission denied")
