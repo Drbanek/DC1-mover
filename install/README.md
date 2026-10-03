@@ -20,7 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/Drbanek/DockerStackMover/main/insta
 sudo bash /tmp/dsm-bootstrap.sh
 ```
 
-The script detects the active /24 interface, current IPv4, gateway and DNS; asks for site/role; derives the target address; checks for an address conflict; updates Ubuntu; installs Docker/Compose and nftables; sets hostname; installs Portainer Agent; and prepares Netplan.
+The script detects the active /24 interface, current IPv4, gateway and DNS; requires an explicit site/location name and asks for role; derives the target address; checks for an address conflict; updates Ubuntu; installs Docker/Compose and nftables; sets hostname; installs Portainer Agent; and prepares Netplan.
 
 For NODE it also requires an explicit `SMAZAT` confirmation before wiping the selected DATA disk, creates GPT/XFS, mounts it at `/srv` with `prjquota`, and creates `/srv/stacks`.
 
