@@ -34,7 +34,17 @@ async def migration_worker(job):
         if collision: raise RuntimeError("Target port collision: " + str(sorted(collision)))
         stack_file = await get_stack_file(stack_id)
         if not stack_file.strip(): raise RuntimeError("Empty stack definition")
-        stack_file, source_host_ip, target_host_ip, rewritten_ports = rewrite_host_bind_ip(stack_file, source_endpoint, target); env = source_stack.get("Env") or []
+        # Managed proxy backends are bound to the WireGuard management IP. Rewrite
+        # both LAN/legacy binds and the management bind when moving between NODEs.
+        stack_file, source_host_ip, target_host_ip, rewritten_ports = rewrite_host_bind_ip(stack_file, source_endpoint, target)
+        source_mgmt = (get_endpoint_settings().get(int(source_id), {}).get("host_ip") or "").strip()
+        target_mgmt = (get_endpoint_settings().get(int(target_id), {}).get("host_ip") or "").strip()
+        if source_mgmt and target_mgmt and source_mgmt != target_mgmt:
+            import re
+            pattern = re.compile(r'(?P<prefix>["\\\'\s-])' + re.escape(source_mgmt) + r'(?P<suffix>:\\d+(?::\\d+)?(?:/(?:tcp|udp|sctp))?)')
+            stack_file, mgmt_rewrites = pattern.subn(lambda m: m.group("prefix") + target_mgmt + m.group("suffix"), stack_file)
+            rewritten_ports += mgmt_rewrites
+        env = source_stack.get("Env") or []
         collision_message = "Cíl je volný"
         if rewritten_ports: collision_message += " · host bind IP: " + source_host_ip + " → " + target_host_ip + " (" + str(rewritten_ports) + "×)"
         job_step(job, "Kontrola kolizí", "ok", collision_message); job_step(job, "Zastavení zdroje", "running", "Zastavuji stack pro konzistentní kopii dat")
