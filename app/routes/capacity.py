@@ -173,7 +173,7 @@ async def node_readiness(endpoint):
         try:
             fw=await agent_firewall(endpoint_id); checks["firewall"]={"ok":bool(fw.get("managed")),"message":"Managed by DockerStackMover" if fw.get("managed") else "Not managed"}
         except Exception as exc: checks["firewall"]={"ok":False,"message":str(exc)}
-    required = ("docker","host_ip","capacity_agent","data_disk","migration","firewall") if role == "NODE" else ("host_ip","capacity_agent","firewall")
+    required = ("docker","host_ip","capacity_agent","data_disk","migration","firewall") if role == "NODE" else ("docker","host_ip")
     ready = all(checks[k]["ok"] for k in required)
     return {"id": endpoint_id, "name": endpoint.get("Name") or ("Endpoint " + str(endpoint_id)), "ready": ready,
             "status": "ready" if ready else "setup_required", "host_ip": host_ip, "host_ip_source": host_ip_source,
