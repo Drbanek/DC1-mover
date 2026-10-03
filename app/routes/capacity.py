@@ -481,9 +481,23 @@ async def rollback_migration(job_id: str, session=Depends(require_csrf)):
     result = job["result"]
     if result.get("finalized"): return result
     await start_stack(result["source_stack_id"], result["source_endpoint_id"])
+    await asyncio.sleep(3)
+    from .general import build_detail
+    from .proxy import sync_stack_proxy, remove_stack_proxy
+    source_detail = await build_detail(result["source_stack_id"])
+    if source_detail.get("domains"):
+        proxy_result = await sync_stack_proxy(source_detail, result["source_endpoint_id"])
+        if not proxy_result.get("configured"):
+            raise RuntimeError("Rollback proxy restore did not produce a Traefik configuration")
     for change in reversed(result.get("dns_changes", [])):
         if change.get("provider") == "vas-hosting":
             await vas_update_a_record(change["zone"], change["record_id"], change["host"], change["old_content"], change.get("ttl") or 60)
+    settings = get_endpoint_settings()
+    source_site = (settings.get(int(result["source_endpoint_id"]), {}).get("site") or "").strip().upper()
+    target_site = (settings.get(int(result["target_endpoint_id"]), {}).get("site") or "").strip().upper()
+    if source_detail.get("domains") and target_site and target_site != source_site:
+        await remove_stack_proxy(source_detail["stack"]["name"], target_site)
     await delete_stack(result["target_stack_id"], result["target_endpoint_id"])
     for volume_name in result.get("volumes", []): await delete_volume(result["target_endpoint_id"], volume_name)
     result["source_state"] = "running"; result["finalized"] = "rolled-back"; persist_job(job); release_stack_lock(job["stack_id"], job["id"]); return result
+

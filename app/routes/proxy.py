@@ -1,5 +1,6 @@
 import base64
 import json
+import hashlib
 import re
 import uuid
 
@@ -84,14 +85,23 @@ async def _run_proxy_helper(proxy_id, cmd, env=None, host_network=False, binds=N
 
 
 async def _write_dynamic_file(proxy_id, filename, content):
-    if not re.fullmatch(r"[a-z0-9._-]+\.ya?ml", filename):
+    if not re.fullmatch(r"[a-z0-9._-]+\\.ya?ml", filename):
         raise RuntimeError("Unsafe Traefik filename")
+    if not content.strip():
+        raise RuntimeError("Refusing to write empty Traefik configuration")
     encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
-    await _run_proxy_helper(
-        proxy_id,
-        'umask 022; printf "%s" ' + json.dumps(encoded) + ' | base64 -d > /dynamic/.' + filename + '.tmp; test -s /dynamic/.' + filename + '.tmp; mv -f /dynamic/.' + filename + '.tmp /dynamic/' + filename + '; test -s /dynamic/' + filename,
-        binds=["/opt/traefik/dynamic:/dynamic"],
+    expected_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    tmp = "." + filename + "." + uuid.uuid4().hex[:10] + ".tmp"
+    cmd = (
+        'umask 022; '
+        'printf "%s" ' + json.dumps(encoded) + ' | base64 -d > /dynamic/' + tmp + '; '
+        'test -s /dynamic/' + tmp + '; '
+        'test "$(sha256sum /dynamic/' + tmp + ' | cut -d" " -f1)" = ' + json.dumps(expected_sha) + '; '
+        'mv -f /dynamic/' + tmp + ' /dynamic/' + filename + '; '
+        'test -s /dynamic/' + filename + '; '
+        'test "$(sha256sum /dynamic/' + filename + ' | cut -d" " -f1)" = ' + json.dumps(expected_sha)
     )
+    await _run_proxy_helper(proxy_id, cmd, binds=["/opt/traefik/dynamic:/dynamic"])
 
 
 async def _remove_dynamic_file(proxy_id, filename):

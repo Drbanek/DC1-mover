@@ -94,11 +94,15 @@ async def migration_worker(job):
             job_step(job, "Rollback zdroje", "running", "Migrace selhala, vracím zdroj do provozu")
             try:
                 await start_stack(stack_id, source_id); await asyncio.sleep(5)
-                if target_proxy_configured:
-                    target_site = get_endpoint_settings().get(int(target_id), {}).get("site", "")
-                    await remove_stack_proxy(detail["stack"]["name"], target_site)
+                settings = get_endpoint_settings()
+                source_site = (settings.get(int(source_id), {}).get("site") or "").strip().upper()
+                target_site = (settings.get(int(target_id), {}).get("site") or "").strip().upper()
                 if detail.get("domains"):
-                    await sync_stack_proxy(detail, source_id)
+                    proxy_result = await sync_stack_proxy(detail, source_id)
+                    if not proxy_result.get("configured"):
+                        raise RuntimeError("Rollback proxy restore did not produce a Traefik configuration")
+                if target_proxy_configured and target_site and target_site != source_site:
+                    await remove_stack_proxy(detail["stack"]["name"], target_site)
                 for change in reversed(dns_changes):
                     await vas_update_a_record(change["zone"], change["record_id"], change["host"], change["old_content"], change["ttl"])
                 job_step(job, "Rollback zdroje", "ok", "Zdrojový stack byl znovu spuštěn" + (" a DNS vráceno" if dns_changes else ""))
