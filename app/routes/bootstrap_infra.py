@@ -81,7 +81,7 @@ docker rm -f portainer >/dev/null 2>&1 || true
 docker pull portainer/portainer-ce:2.45.1
 docker run -d --name portainer --restart=always -p 9443:9443 -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:2.45.1 >/dev/null
 for i in $(seq 1 45); do
-  curl -kfsS https://127.0.0.1:9443/api/status >/dev/null 2>&1 && exit 0
+  curl -kfsS https://127.0.0.1:9443/api/system/status >/dev/null 2>&1 && exit 0
   sleep 2
 done
 exit 51
@@ -296,12 +296,25 @@ docker rm -f portainer >/dev/null 2>&1 || true
 docker pull portainer/portainer-ce:2.45.1
 docker run -d --name portainer --restart=always -p 9443:9443 -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:2.45.1 >/dev/null
 for i in $(seq 1 45); do
-  curl -kfsS https://127.0.0.1:9443/api/status >/dev/null 2>&1 && exit 0
+  curl -kfsS https://127.0.0.1:9443/api/system/status >/dev/null 2>&1 && exit 0
   sleep 2
 done
 exit 51
 """, password, 1200)
-            emit("portainer", "done", "Portainer běží")
+            setup_token = _run(conn, r"""set -e
+for i in $(seq 1 20); do
+  TOKEN=$(docker logs portainer 2>&1 | sed -n 's/.*setup_token=\\([0-9a-fA-F]\\{64\\}\\).*/\\1/p' | tail -n1)
+  if [ -n "$TOKEN" ]; then
+    printf '%s' "$TOKEN"
+    exit 0
+  fi
+  sleep 1
+done
+exit 52
+""", password).strip()
+            if not setup_token:
+                raise RuntimeError("Portainer setup token nebyl nalezen.")
+            emit("portainer", "done", "Portainer běží, setup token načten")
 
             if host != lan_ip:
                 emit("lan", "running", "Ověřuji a přepínám PORTAINER na " + lan_ip)
@@ -378,7 +391,7 @@ nohup bash -c 'sleep 2; netplan apply' >/var/log/dockerstackmover-portainer-ip-s
             for _ in range(40):
                 try:
                     async with httpx.AsyncClient(base_url=url, verify=False, timeout=4) as pc:
-                        s = await pc.get("/api/status")
+                        s = await pc.get("/api/system/status")
                         if s.status_code == 200:
                             emit("lan", "done", "LAN IP ověřena: " + lan_ip)
                             break
@@ -390,7 +403,7 @@ nohup bash -c 'sleep 2; netplan apply' >/var/log/dockerstackmover-portainer-ip-s
 
             admin_password = secrets.token_urlsafe(18)
             async with httpx.AsyncClient(base_url=url, verify=False, timeout=20) as pc:
-                init = await pc.post("/api/users/admin/init", json={"Username": "admin", "Password": admin_password})
+                init = await pc.post("/api/users/admin/init", headers={"X-Setup-Token": setup_token}, json={"Username": "admin", "Password": admin_password})
                 if init.status_code not in (200, 201):
                     raise RuntimeError("Portainer admin init HTTP " + str(init.status_code))
                 auth = await pc.post("/api/auth", json={"Username": "admin", "Password": admin_password})
