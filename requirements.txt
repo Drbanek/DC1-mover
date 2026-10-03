@@ -3,3 +3,4 @@ uvicorn==0.54.0
 httpx==0.28.1
 paramiko==4.0.0
 dnspython==2.8.0
+PyYAML==6.0.3
