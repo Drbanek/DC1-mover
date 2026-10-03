@@ -20,10 +20,10 @@ async function loadReadiness(){
    head.innerHTML="<div><strong>"+esc(node.name)+"</strong><div class='muted'>"+esc(node.host_ip||"IP nezjištěna")+(node.site?" · "+esc(node.site):"")+"</div></div><span class='badge "+(node.ready?"running":"stopped")+"'>"+(node.ready?"READY":"SETUP REQUIRED")+"</span>";
    item.appendChild(head);
    const checks=document.createElement("div");checks.className="readinessChecks";
-   const labels={docker:"Docker",host_ip:"Host IP",capacity_agent:"Capacity Agent",data_disk:"DATA /srv",migration:"Migrace"};
+   const labels={docker:"Docker",host_ip:"Host IP",capacity_agent:"Node Agent",data_disk:"DATA /srv",firewall:"Firewall",migration:"Migrace"};
    Object.keys(labels).forEach(function(key){const ch=node.checks[key]||{};const row=document.createElement("div");row.className="readinessCheck "+(ch.ok?"checkOk":"checkError");row.innerHTML="<span class='checkIcon'>"+(ch.ok?"✓":"×")+"</span><span><strong>"+labels[key]+"</strong><small>"+esc(ch.message||"")+"</small></span>";checks.appendChild(row)});
    item.appendChild(checks);
-   if(!node.ready&&hasPerm("admin")){const actions=document.createElement("div");actions.className="actions";const btn=document.createElement("button");btn.textContent="Připravit NODE";btn.onclick=function(){prepareNode(node.id,btn)};actions.appendChild(btn);item.appendChild(actions)}
+   if(!node.ready&&hasPerm("admin")){const actions=document.createElement("div");actions.className="actions";const btn=document.createElement("button");btn.textContent="Připravit NODE";btn.onclick=function(){prepareNode(node.id,btn)};actions.appendChild(btn);const fw=document.createElement("button");fw.className="secondary";fw.textContent="Nastavit firewall";fw.onclick=function(){configureFirewall(node.id)};actions.appendChild(fw);item.appendChild(actions)}
    box.appendChild(item);
   });
  }catch(e){box.innerHTML='<div class="error item">'+esc(e.message)+'</div>'}
@@ -79,4 +79,10 @@ async function loadBackups(){
 async function backupSelectedStack(){
  if(!selectedStackId)return;if(!confirm("Vytvořit konzistentní snapshot persistentních volumes? Stack bude krátce zastaven."))return;
  try{const r=await fetch("/api/stacks/"+selectedStackId+"/backup",{method:"POST",headers:{"X-CSRF-Token":csrfToken}});if(!r.ok)throw new Error(await r.text());alert("Snapshot vytvořen.");await loadBackups()}catch(e){alert("Snapshot selhal: "+e.message)}
+}
+
+async function configureFirewall(endpointId){
+ const source=prompt("Povolená management veřejná IP (např. 78.24.11.49):");if(!source)return;
+ if(!confirm("Nastavit firewall NODE tak, aby TCP 9001 a 9100 přijímal pouze z "+source+"?"))return;
+ try{const r=await fetch("/api/endpoints/"+endpointId+"/firewall",{method:"PUT",headers:{"Content-Type":"application/json","X-CSRF-Token":csrfToken},body:JSON.stringify({management_sources:[source],management_ports:[9001,9100]})});if(!r.ok)throw new Error(await r.text());await loadReadiness();alert("Firewall politika nastavena.")}catch(e){alert("Firewall selhal: "+e.message)}
 }
