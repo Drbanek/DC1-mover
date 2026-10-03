@@ -169,7 +169,7 @@ function updateProvisionStep(id,status,detail){
 }
 async function provisionServer(){
  const b=document.getElementById("provButton"),state=document.getElementById("provState");
- const payload={name:document.getElementById("provName").value,site:document.getElementById("provSite").value,role:document.getElementById("provRole").value,
+ const payload={name:document.getElementById("provName").value,site:document.getElementById("provSite").value,public_ip:document.getElementById("provPublicIp").value,role:document.getElementById("provRole").value,
   host:document.getElementById("provHost").value,lan_ip:document.getElementById("provLanIp").value,management_ip:document.getElementById("provMgmtIp").value,data_disk:document.getElementById("provDataDisk").value||"AUTO",
   ssh_user:document.getElementById("provUser").value,ssh_password:document.getElementById("provPassword").value,
   hub_host:document.getElementById("provHubHost").value,hub_ssh_user:document.getElementById("provHubUser").value,hub_ssh_password:document.getElementById("provHubPassword").value,
