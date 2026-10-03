@@ -124,10 +124,10 @@ async function showFirewall(endpointId,name){
 async function provisionServer(){
  const b=document.getElementById("provButton"),state=document.getElementById("provState");
  const payload={name:document.getElementById("provName").value,site:document.getElementById("provSite").value,role:document.getElementById("provRole").value,
-  host:document.getElementById("provHost").value,lan_ip:document.getElementById("provLanIp").value,management_ip:document.getElementById("provMgmtIp").value,
+  host:document.getElementById("provHost").value,lan_ip:document.getElementById("provLanIp").value,management_ip:document.getElementById("provMgmtIp").value,data_disk:document.getElementById("provDataDisk").value||"AUTO",
   ssh_user:document.getElementById("provUser").value,ssh_password:document.getElementById("provPassword").value,
   hub_host:document.getElementById("provHubHost").value,hub_ssh_user:document.getElementById("provHubUser").value,hub_ssh_password:document.getElementById("provHubPassword").value,
-  hub_endpoint:document.getElementById("provHubEndpoint").value,hub_management_ip:"10.200.0.8"};
+  hub_endpoint:document.getElementById("provHubEndpoint").value,hub_management_ip:"10.200.0.8",manager_management_ip:"10.200.0.10"};
  if(!payload.host||!payload.lan_ip||!payload.management_ip||!payload.ssh_password||!payload.hub_ssh_password){alert("Vyplň SSH adresu, LAN/management IP a obě SSH hesla.");return}
  if(!confirm("Připravit "+(payload.name||payload.host)+"?\n\nPo ověření WireGuardu budou porty 9001/9100 dostupné pouze přes management overlay."))return;
  b.disabled=true;state.textContent="Provisioning běží – SSH, WireGuard, Docker, firewall, Portainer…";
