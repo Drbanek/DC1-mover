@@ -10,7 +10,11 @@ WG_PORT=${WG_PORT:-51820}
 
 init_hub() {
   apt-get update
-  apt-get install -y wireguard
+  apt-get install -y wireguard iptables
+  cat >/etc/sysctl.d/99-dockerstackmover-wg-forward.conf <<'EOF'
+net.ipv4.ip_forward=1
+EOF
+  sysctl --system >/dev/null
   install -d -m 700 "$WG_DIR"
   if [[ ! -f "$WG_DIR/hub.key" ]]; then
     umask 077
@@ -24,10 +28,14 @@ init_hub() {
 Address = $WG_ADDR
 ListenPort = $WG_PORT
 PrivateKey = $priv
+PostUp = iptables -C FORWARD -i $WG_IF -o $WG_IF -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i $WG_IF -o $WG_IF -j ACCEPT
+PostDown = iptables -D FORWARD -i $WG_IF -o $WG_IF -j ACCEPT 2>/dev/null || true
 EOF
     chmod 600 "$WG_CONF"
   fi
   systemctl enable --now wg-quick@$WG_IF
+  # Existing hubs may have been created before PostUp existed; apply forwarding live too.
+  iptables -C FORWARD -i "$WG_IF" -o "$WG_IF" -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i "$WG_IF" -o "$WG_IF" -j ACCEPT
   echo "Hub public key: $(cat "$WG_DIR/hub.pub")"
   echo "Hub management IP: ${WG_ADDR%/*}"
   echo "UDP port: $WG_PORT"
