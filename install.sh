@@ -44,6 +44,9 @@ services:
     restart: unless-stopped
     ports:
       - "${MOVER_BIND_IP}:${MOVER_PORT}:8080"
+    environment:
+      DSM_HOST_IP: "${MOVER_BIND_IP}"
+      DSM_HOST_PREFIX: "${MOVER_PREFIX}"
     volumes:
       - data:/data
 volumes:
@@ -51,6 +54,7 @@ volumes:
 EOF
 cat >/opt/dockerstackmover/.env <<EOF
 MOVER_BIND_IP=$MGMT_IP
+MOVER_PREFIX=$PREFIX
 MOVER_PORT=8082
 EOF
 chmod 600 /opt/dockerstackmover/.env
