@@ -99,6 +99,66 @@ async def install_capacity_agent(endpoint_id: int, session=Depends(require_csrf)
     raise HTTPException(502, "Capacity Agent se po instalaci nepodařilo ověřit: " + last_error)
 
 
+
+async def node_readiness(endpoint):
+    """Return an actionable readiness report for any Portainer endpoint."""
+    endpoint_id = int(endpoint["Id"])
+    settings = get_endpoint_settings().get(endpoint_id, {})
+    host_ip, host_ip_source = endpoint_host_ip(endpoint)
+    checks = {
+        "docker": {"ok": False, "message": "Docker API unavailable"},
+        "host_ip": {"ok": bool(host_ip), "message": host_ip or "Host IP could not be detected"},
+        "capacity_agent": {"ok": False, "message": "Not configured"},
+        "data_disk": {"ok": False, "message": "/srv capacity unavailable"},
+        "migration": {"ok": bool(settings.get("migration_enabled")), "message": "Enabled" if settings.get("migration_enabled") else "Disabled"},
+    }
+    try:
+        info = await docker_request(endpoint_id, "GET", "/info")
+        checks["docker"] = {"ok": info.status_code == 200, "message": "Online" if info.status_code == 200 else "HTTP " + str(info.status_code)}
+    except Exception as exc:
+        checks["docker"]["message"] = str(exc)
+    if settings.get("agent_url") and settings.get("agent_token"):
+        try:
+            data_disk, system_disk = await agent_disk_usage(endpoint_id)
+            checks["capacity_agent"] = {"ok": True, "message": "Online"}
+            checks["data_disk"] = {"ok": True, "message": fmt_bytes(data_disk["free"]) + " free", "free": data_disk["free"], "total": data_disk["total"]}
+        except Exception as exc:
+            checks["capacity_agent"] = {"ok": False, "message": str(exc)}
+    ready = all(checks[k]["ok"] for k in ("docker", "host_ip", "capacity_agent", "data_disk", "migration"))
+    return {"id": endpoint_id, "name": endpoint.get("Name") or ("Endpoint " + str(endpoint_id)), "ready": ready,
+            "status": "ready" if ready else "setup_required", "host_ip": host_ip, "host_ip_source": host_ip_source,
+            "site": settings.get("site", ""), "public_ip": settings.get("public_ip", ""), "checks": checks}
+
+@app.get("/api/nodes/readiness")
+async def nodes_readiness(session=Depends(require_permission("dashboard_read"))):
+    endpoints = await get_endpoints()
+    result = []
+    for endpoint in endpoints:
+        try:
+            result.append(await node_readiness(endpoint))
+        except Exception as exc:
+            result.append({"id": endpoint.get("Id"), "name": endpoint.get("Name"), "ready": False, "status": "error", "error": str(exc)})
+    return {"nodes": result}
+
+@app.post("/api/endpoints/{endpoint_id}/prepare")
+async def prepare_node(endpoint_id: int, session=Depends(require_csrf)):
+    """Enable migrations and install/repair the Capacity Agent in one action."""
+    if "admin" not in user_permissions(session.get("user", "")):
+        raise HTTPException(403, "Permission denied")
+    endpoints = await get_endpoints()
+    endpoint = next((e for e in endpoints if int(e.get("Id")) == endpoint_id), None)
+    if not endpoint:
+        raise HTTPException(404, "Endpoint not found")
+    settings = get_endpoint_settings().get(endpoint_id, {})
+    host_ip, _ = endpoint_host_ip(endpoint)
+    if not host_ip:
+        raise HTTPException(400, "Host IP se nepodařilo automaticky zjistit. Nastav ji ručně jako override.")
+    save_endpoint_setting(endpoint_id, True, settings.get("host_ip", ""), settings.get("site", ""),
+                          settings.get("public_ip", ""), settings.get("agent_url", ""), None)
+    # Reuse the hardened installer; it persists generated credentials only after verification.
+    await install_capacity_agent(endpoint_id, session)
+    return await node_readiness(endpoint)
+
 def fmt_bytes(value):
     value = float(value or 0); units = ["B", "KB", "MB", "GB", "TB"]
     for unit in units:
