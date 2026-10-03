@@ -126,22 +126,25 @@ if [ -n "$WORKLOAD" ]; then
 fi
 """
             if role == "PROXY":
+                # BusyBox/Alpine compatibility is irrelevant here: this runs on
+                # the Ubuntu host. Avoid GNU find -printf anyway so the safety
+                # check stays portable and its failure is visible.
                 inspect_script += r"""
-FILES=$(find /opt/traefik/dynamic -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -printf '%f\n' 2>/dev/null || true)
+FILES=$(find /opt/traefik/dynamic -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -print 2>/dev/null | sed 's#.*/##' || true)
 if [ -n "$FILES" ]; then
-  echo "PROXYFILES:$FILES"
+  printf 'PROXYFILES:%s\\n' "$FILES" >&2
   exit 43
 fi
 """
             try:
                 _run(target, inspect_script, target_password)
             except Exception as exc:
-                msg = str(exc)
+                msg = str(exc).strip() or (type(exc).__name__ + ": SSH safety check failed")
                 if "WORKLOAD:" in msg:
                     raise HTTPException(409, role + " obsahuje aplikační kontejnery a nelze jej odebrat. " + msg)
                 if "PROXYFILES:" in msg:
                     raise HTTPException(409, "PROXY obsahuje aktivní Traefik konfiguraci a nelze jej odebrat. " + msg)
-                raise
+                raise RuntimeError(msg) from exc
             # Cleanup is deliberately idempotent: missing containers are OK.
             names = ["portainer_agent", "dockerstackmover-capacity-agent"] if role == "NODE" else ["portainer_agent", "traefik"]
             _run(target, "docker rm -f " + " ".join(shlex.quote(x) for x in names) + " >/dev/null 2>&1 || true", target_password)
@@ -150,7 +153,7 @@ fi
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(502, "Recovery kontrola/úklid přes SSH selhal: " + str(exc))
+        raise HTTPException(502, "Recovery kontrola/úklid přes SSH selhal: " + (str(exc).strip() or type(exc).__name__))
 
     # Remove the hub peer only after the target has been verified and cleaned.
     try:
