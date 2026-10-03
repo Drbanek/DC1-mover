@@ -46,6 +46,35 @@ chmod 600 /etc/wireguard/dsm-mgmt.key
 chmod 644 /etc/wireguard/dsm-mgmt.pub
 MGMT_WG_PUBLIC_KEY=$(cat /etc/wireguard/dsm-mgmt.pub)
 
+# Narrow host helper: only accepts a WireGuard public key and IPv4:port endpoint,
+# writes the fixed MGMT address 10.200.0.10/16 and starts wg-dsm.
+install -d -m 755 /opt/dockerstackmover-host-tools
+cat >/opt/dockerstackmover-host-tools/configure-mgmt-wireguard <<'DSMHELPER'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+HUB_PUB="${1:-}"
+ENDPOINT="${2:-}"
+[[ "$HUB_PUB" =~ ^[A-Za-z0-9+/]{43}=$ ]] || { echo "Invalid HUB public key" >&2; exit 2; }
+[[ "$ENDPOINT" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}:[0-9]{1,5}$ ]] || { echo "Invalid HUB endpoint" >&2; exit 3; }
+PRIV=$(cat /etc/wireguard/dsm-mgmt.key)
+cat >/etc/wireguard/wg-dsm.conf <<EOF
+[Interface]
+Address = 10.200.0.10/16
+PrivateKey = $PRIV
+
+[Peer]
+PublicKey = $HUB_PUB
+Endpoint = $ENDPOINT
+AllowedIPs = 10.200.0.0/16
+PersistentKeepalive = 25
+EOF
+chmod 600 /etc/wireguard/wg-dsm.conf
+systemctl enable wg-quick@wg-dsm >/dev/null
+systemctl restart wg-quick@wg-dsm
+ip -4 addr show dev wg-dsm | grep -q '10.200.0.10/16'
+DSMHELPER
+chmod 755 /opt/dockerstackmover-host-tools/configure-mgmt-wireguard
+
 # Prepare the application first on the current address. The permanent IP
 # switch is intentionally the final step because an SSH session can be lost.
 install -d -m 0750 /opt/dockerstackmover
@@ -63,6 +92,7 @@ services:
       DSM_WG_PUBLIC_KEY: "${DSM_WG_PUBLIC_KEY}"
     volumes:
       - data:/data
+      - /opt/dockerstackmover-host-tools:/host-tools:ro
 volumes:
   data:
 EOF
