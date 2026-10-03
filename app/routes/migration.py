@@ -41,21 +41,29 @@ async def migration_worker(job):
         target_mgmt = (get_endpoint_settings().get(int(target_id), {}).get("host_ip") or "").strip()
         managed_proxy = get_stack_proxy_setting(detail["stack"]["name"])
         if source_mgmt and target_mgmt and source_mgmt != target_mgmt:
-            # Portainer may return the original stack definition instead of the
-            # server-side Compose content used by the managed-domain redeploy.
-            # For managed domains, reconstruct the required target bind from DSM
-            # metadata rather than requiring the source bind to be present.
-            # Rewrite every explicit Compose host bind from the source WG IP.
-            # Match the source IP only when it is the host side of a published
-            # port (IP:HOST_PORT:CONTAINER_PORT). This also catches legacy/user
-            # publishes such as 10.200.0.11:8081:80, not just DSM's managed
-            # proxy backend port.
-            pattern = re.compile(
-                r'(?<![0-9.])' + re.escape(source_mgmt) +
-                r'(?=:[0-9]+:[0-9]+(?:/(?:tcp|udp|sctp))?(?:["\\\'\\s]|$))'
-            )
-            stack_file, mgmt_rewrites = pattern.subn(target_mgmt, stack_file)
-            rewritten_ports += mgmt_rewrites
+            # Rewrite source WireGuard host binds structurally in Compose.
+            # Handle both short syntax (IP:HOST:CONTAINER) and long syntax
+            # (host_ip/published/target); regex-based rewriting is too fragile.
+            import yaml
+            compose_data = yaml.safe_load(stack_file) or {}
+            for svc in (compose_data.get("services") or {}).values():
+                ports = list((svc or {}).get("ports") or [])
+                changed_ports = []
+                for port in ports:
+                    if isinstance(port, str):
+                        prefix = source_mgmt + ":"
+                        if port.startswith(prefix):
+                            port = target_mgmt + port[len(source_mgmt):]
+                            rewritten_ports += 1
+                    elif isinstance(port, dict):
+                        if str(port.get("host_ip") or "").strip() == source_mgmt:
+                            port = dict(port)
+                            port["host_ip"] = target_mgmt
+                            rewritten_ports += 1
+                    changed_ports.append(port)
+                if ports:
+                    svc["ports"] = changed_ports
+            stack_file = yaml.safe_dump(compose_data, sort_keys=False, allow_unicode=True)
             if managed_proxy:
                 from .proxy import _inject_backend_publish
                 service = str(managed_proxy.get("service") or "")
