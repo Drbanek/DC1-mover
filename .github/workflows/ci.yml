@@ -21,6 +21,8 @@ jobs:
           python-version: '3.13'
       - name: Compile Python
         run: python -m compileall -q app
+      - name: Validate installer shell scripts
+        run: bash -n install/bootstrap.sh install/wireguard-hub.sh
       - name: Validate Compose
         run: docker compose config -q
         env:
