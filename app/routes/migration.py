@@ -83,7 +83,15 @@ async def migration_worker(job):
             step_name = "Volume: " + volume["name"]; job_step(job, step_name, "running", "Vytvářím volume na cíli")
             await create_volume(target_id, volume["name"], volume.get("driver") or "local"); created_volumes.append(volume["name"]); job_step(job, step_name, "running", "Kopíruji obsah přes Docker archive API")
             await copy_volume(source_id, target_id, volume["name"]); job_step(job, step_name, "ok", "Data přenesena")
-        job_step(job, "Vytvoření stacku", "running", "Vytvářím stack na " + target["Name"]); created = await create_target_stack(target_id, detail["stack"]["name"], stack_file, env); target_stack_id = created.get("Id")
+        # Persist the exact final Compose sent to Portainer. This is intentionally
+        # attached to the migration job so failed target deployments can be diagnosed
+        # without guessing which transformation produced the final port bindings.
+        job["debug_final_compose"] = stack_file
+        job["debug_target_endpoint_id"] = target_id
+        job["debug_target_host_ip"] = target_mgmt if 'target_mgmt' in locals() else ""
+        persist_job(job)
+        job_step(job, "Vytvoření stacku", "running", "Vytvářím stack na " + target["Name"] + " · target WG " + (target_mgmt or "?"))
+        created = await create_target_stack(target_id, detail["stack"]["name"], stack_file, env); target_stack_id = created.get("Id")
         job_step(job, "Vytvoření stacku", "ok", "Portainer stack ID: " + str(target_stack_id)); job_step(job, "Ověření cíle", "running", "Čekám na spuštění a healthcheck cílových kontejnerů · timeout 120 s")
         deadline = asyncio.get_running_loop().time() + 120; migrated = []; last_state = "Kontejnery zatím nejsou vytvořené"
         while asyncio.get_running_loop().time() < deadline:
