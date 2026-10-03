@@ -74,8 +74,8 @@ async def migration_worker(job):
                 if record.get("content") != source_public_ip:
                     raise RuntimeError("DNS safety check failed for " + host + ": current A record is " + str(record.get("content")) + ", expected " + source_public_ip)
                 change = {"provider": "vas-hosting", "zone": zone, "record_id": record["id"], "host": host, "type": "A", "old_content": record.get("content"), "new_content": target_public_ip, "ttl": int(record.get("ttl") or 60)}
-                await vas_update_a_record(zone, record["id"], host, target_public_ip, change["ttl"]); dns_changes.append(change)
-            job_step(job, "DNS cutover", "ok", str(len(dns_changes)) + " A záznam(y) přepnuty na " + target_public_ip)
+                await vas_update_a_record(zone, record["id"], host, target_public_ip, min(change["ttl"], 60)); dns_changes.append(change)
+            job_step(job, "DNS cutover", "ok", str(len(dns_changes)) + " A záznam(y) přepnuty na " + target_public_ip + " · TTL do potvrzení max. 60 s")
         elif detail["domains"]:
             reason = "stejná veřejná IP" if source_public_ip and source_public_ip == target_public_ip else "DNS provider/Public IP není nakonfigurován"
             job_step(job, "DNS cutover", "ok", "Beze změny · " + reason)
