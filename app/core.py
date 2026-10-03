@@ -126,6 +126,8 @@ def init_db():
             conn.execute("ALTER TABLE endpoint_settings ADD COLUMN agent_token TEXT")
         if "role" not in columns:
             conn.execute("ALTER TABLE endpoint_settings ADD COLUMN role TEXT NOT NULL DEFAULT 'NONE'")
+        if "lan_ip" not in columns:
+            conn.execute("ALTER TABLE endpoint_settings ADD COLUMN lan_ip TEXT")
         conn.execute("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, secret INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)")
         conn.execute("CREATE TABLE IF NOT EXISTS app_users (username TEXT PRIMARY KEY, password_hash TEXT NOT NULL, updated_at TEXT NOT NULL)")
         user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(app_users)").fetchall()}
@@ -137,19 +139,19 @@ def init_db():
 def get_endpoint_settings():
     with db() as conn:
         rows = conn.execute("SELECT * FROM endpoint_settings").fetchall()
-    return {int(r["endpoint_id"]): {"migration_enabled": bool(r["migration_enabled"]), "host_ip": r["host_ip"] or "", "site": r["site"] or "", "public_ip": r["public_ip"] or "", "agent_url": r["agent_url"] or "", "agent_token": r["agent_token"] or "", "role": (r["role"] or "NONE").upper()} for r in rows}
+    return {int(r["endpoint_id"]): {"migration_enabled": bool(r["migration_enabled"]), "host_ip": r["host_ip"] or "", "lan_ip": r["lan_ip"] or "", "site": r["site"] or "", "public_ip": r["public_ip"] or "", "agent_url": r["agent_url"] or "", "agent_token": r["agent_token"] or "", "role": (r["role"] or "NONE").upper()} for r in rows}
 
-def save_endpoint_setting(endpoint_id, migration_enabled, host_ip="", site="", public_ip="", agent_url="", agent_token=None, role="NONE"):
+def save_endpoint_setting(endpoint_id, migration_enabled, host_ip="", site="", public_ip="", agent_url="", agent_token=None, role="NONE", lan_ip=""):
     with db() as conn:
         conn.execute("""
-            INSERT INTO endpoint_settings(endpoint_id, migration_enabled, host_ip, site, public_ip, agent_url, agent_token, role, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO endpoint_settings(endpoint_id, migration_enabled, host_ip, site, public_ip, agent_url, agent_token, role, lan_ip, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(endpoint_id) DO UPDATE SET migration_enabled=excluded.migration_enabled,
             host_ip=excluded.host_ip, site=excluded.site, public_ip=excluded.public_ip, agent_url=excluded.agent_url,
             agent_token=CASE WHEN excluded.agent_token IS NULL THEN endpoint_settings.agent_token ELSE excluded.agent_token END,
-            role=excluded.role, updated_at=excluded.updated_at
+            role=excluded.role, lan_ip=CASE WHEN excluded.lan_ip != '' THEN excluded.lan_ip ELSE endpoint_settings.lan_ip END, updated_at=excluded.updated_at
         """, (int(endpoint_id), 1 if migration_enabled else 0, (host_ip or "").strip(), (site or "").strip(), (public_ip or "").strip(),
-              (agent_url or "").strip().rstrip("/"), agent_token, (role or "NONE").upper(), utcnow()))
+              (agent_url or "").strip().rstrip("/"), agent_token, (role or "NONE").upper(), (lan_ip or "").strip(), utcnow()))
 
 def migration_endpoints(endpoints):
     settings = get_endpoint_settings()
