@@ -33,6 +33,19 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 systemctl enable --now docker
 
+# MGMT is always a WireGuard management peer. Prepare its persistent identity
+# on the host now; the HUB peer is added later by the first-infrastructure flow.
+apt-get update
+apt-get install -y wireguard
+install -d -m 700 /etc/wireguard
+if [[ ! -f /etc/wireguard/dsm-mgmt.key ]]; then
+  umask 077
+  wg genkey | tee /etc/wireguard/dsm-mgmt.key | wg pubkey >/etc/wireguard/dsm-mgmt.pub
+fi
+chmod 600 /etc/wireguard/dsm-mgmt.key
+chmod 644 /etc/wireguard/dsm-mgmt.pub
+MGMT_WG_PUBLIC_KEY=$(cat /etc/wireguard/dsm-mgmt.pub)
+
 # Prepare the application first on the current address. The permanent IP
 # switch is intentionally the final step because an SSH session can be lost.
 install -d -m 0750 /opt/dockerstackmover
@@ -47,6 +60,7 @@ services:
     environment:
       DSM_HOST_IP: "${MOVER_BIND_IP}"
       DSM_HOST_PREFIX: "${MOVER_PREFIX}"
+      DSM_WG_PUBLIC_KEY: "${DSM_WG_PUBLIC_KEY}"
     volumes:
       - data:/data
 volumes:
@@ -56,6 +70,7 @@ cat >/opt/dockerstackmover/.env <<EOF
 MOVER_BIND_IP=$MGMT_IP
 MOVER_PREFIX=$PREFIX
 MOVER_PORT=8082
+DSM_WG_PUBLIC_KEY=$MGMT_WG_PUBLIC_KEY
 EOF
 chmod 600 /opt/dockerstackmover/.env
 cd /opt/dockerstackmover
