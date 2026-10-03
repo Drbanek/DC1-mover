@@ -286,8 +286,59 @@ printf 'net.ipv4.ip_forward=1\n' >/etc/sysctl.d/99-dockerstackmover-wg-forward.c
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
 systemctl enable --now wg-quick@wg-dsm
 """, password)
-            hub_pub = _run(conn, "cat /etc/wireguard/hub.pub", password)
-            emit("wireguard", "done", "WG HUB 10.200.0.8 připraven")
+            hub_pub = _run(conn, "cat /etc/wireguard/hub.pub", password).strip()
+
+            mgmt_host = os.environ.get("DSM_HOST_IP", "").strip()
+            if not mgmt_host:
+                raise RuntimeError("MGMT host IP není dostupná.")
+            mgmt_peer = _run(conn, r"""set -e
+MGMT_PUB=$(wg show wg-dsm peers | while read p; do
+  [ "$(wg show wg-dsm allowed-ips "$p" | tr -d ' ')" = "10.200.0.10/32" ] && { echo "$p"; break; }
+done)
+if [ -n "$MGMT_PUB" ]; then
+  printf '%s' "$MGMT_PUB"
+fi
+""", password).strip()
+
+            import subprocess
+            local_setup = r"""set -e
+export DEBIAN_FRONTEND=noninteractive
+if ! command -v wg >/dev/null 2>&1; then
+  apt-get update
+  apt-get install -y wireguard
+fi
+install -d -m 700 /etc/wireguard
+if [ ! -f /etc/wireguard/dsm-mgmt.key ]; then
+  umask 077
+  wg genkey | tee /etc/wireguard/dsm-mgmt.key | wg pubkey >/etc/wireguard/dsm-mgmt.pub
+fi
+PRIV=$(cat /etc/wireguard/dsm-mgmt.key)
+cat >/etc/wireguard/wg-dsm.conf <<EOF
+[Interface]
+Address = 10.200.0.10/16
+PrivateKey = $PRIV
+
+[Peer]
+PublicKey = __HUB_PUB__
+Endpoint = __HUB_ENDPOINT__
+AllowedIPs = 10.200.0.0/16
+PersistentKeepalive = 25
+EOF
+chmod 600 /etc/wireguard/wg-dsm.conf
+systemctl enable --now wg-quick@wg-dsm
+cat /etc/wireguard/dsm-mgmt.pub
+""".replace("__HUB_PUB__", hub_pub).replace("__HUB_ENDPOINT__", wg_endpoint)
+            proc = subprocess.run(["sudo", "-n", "bash", "-c", local_setup], text=True, capture_output=True, timeout=180)
+            if proc.returncode != 0:
+                raise RuntimeError("MGMT WireGuard nelze připravit bez sudo: " + (proc.stderr or proc.stdout)[-300:])
+            mgmt_pub = proc.stdout.strip().splitlines()[-1].strip()
+            if not mgmt_pub:
+                raise RuntimeError("MGMT WireGuard public key nebyl vytvořen.")
+
+            peer_cmd = "wg set wg-dsm peer " + shlex.quote(mgmt_pub) + " allowed-ips 10.200.0.10/32; " + \
+                       "wg-quick save wg-dsm >/dev/null"
+            _run(conn, peer_cmd, password)
+            emit("wireguard", "done", "WG HUB 10.200.0.8 + MGMT 10.200.0.10 připraveny")
 
             emit("portainer", "running", "Instaluji Portainer Server")
             _run(conn, r"""set -e
