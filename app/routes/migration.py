@@ -45,7 +45,15 @@ async def migration_worker(job):
             # server-side Compose content used by the managed-domain redeploy.
             # For managed domains, reconstruct the required target bind from DSM
             # metadata rather than requiring the source bind to be present.
-            pattern = re.compile(r'(?<![0-9.])' + re.escape(source_mgmt) + r'(?=:\\d+:)')
+            # Rewrite every explicit Compose host bind from the source WG IP.
+            # Match the source IP only when it is the host side of a published
+            # port (IP:HOST_PORT:CONTAINER_PORT). This also catches legacy/user
+            # publishes such as 10.200.0.11:8081:80, not just DSM's managed
+            # proxy backend port.
+            pattern = re.compile(
+                r'(?<![0-9.])' + re.escape(source_mgmt) +
+                r'(?=:[0-9]+:[0-9]+(?:/(?:tcp|udp|sctp))?(?:["\\\'\\s]|$))'
+            )
             stack_file, mgmt_rewrites = pattern.subn(target_mgmt, stack_file)
             rewritten_ports += mgmt_rewrites
             if managed_proxy:
