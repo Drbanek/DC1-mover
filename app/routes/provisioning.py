@@ -150,8 +150,112 @@ docker rm -f portainer_agent >/dev/null 2>&1 || true
 docker run -d --name portainer_agent --restart=always -p 9001:9001 -v /var/run/docker.sock:/var/run/docker.sock -v /var/lib/docker/volumes:/var/lib/docker/volumes -v /:/host portainer/agent:2.45.1 >/dev/null
 # Do not continue to firewall/Portainer registration unless 9001 is actually
 # published and the Agent container is running.
-docker inspect -f '{{{{.State.Running}}}}' portainer_agent | grep -qx true
-docker port portainer_agent 9001/tcp | grep -q ':9001"""
+docker inspect -f '{{.State.Running}}' portainer_agent | grep -qx true
+docker port portainer_agent 9001/tcp | grep -Eq '(^|:)9001
+        _run(target,docker,password,900)
+        steps.append("Docker + Portainer Agent OK")
+        fw=f"""systemctl enable --now nftables
+nft delete table inet dockerstackmover-bootstrap >/dev/null 2>&1 || true
+nft add table inet dockerstackmover-bootstrap
+nft 'add chain inet dockerstackmover-bootstrap input {{ type filter hook input priority -10; policy accept; }}'
+nft add rule inet dockerstackmover-bootstrap input ct state established,related accept
+nft add rule inet dockerstackmover-bootstrap input iifname lo accept
+nft add rule inet dockerstackmover-bootstrap input iifname wg-dsm ip saddr {hub_mgmt_ip} tcp dport '{{ 9001, 9100 }}' accept
+nft add rule inet dockerstackmover-bootstrap input tcp dport '{{ 9001, 9100 }}' drop"""
+        _run(target,fw,password)
+        steps.append("Management firewall OK")
+        # Test the exact central management path before returning success.
+        _run(hub,f"timeout 4 bash -lc '</dev/tcp/{mgmt_ip}/9001'")
+        steps.append("MAIN -> "+mgmt_ip+":9001 OK")
+        return {"ok":True,"name":name,"site":site,"role":role,"lan_ip":lan_ip,"management_ip":mgmt_ip,
+                "wireguard_public_key":peer_pub,"steps":steps}
+    finally:
+        try:
+            if target: target.close()
+        except Exception: pass
+        if hub:
+            try: hub.close()
+            except Exception: pass
+
+
+@app.post("/api/provisioning/server")
+async def provision_server(request: Request, session=Depends(require_csrf)):
+    if "admin" not in user_permissions(session.get("user","")):
+        raise HTTPException(403,"Permission denied")
+    payload=await request.json()
+    try:
+        result=await asyncio.to_thread(_provision,payload)
+    except Exception as exc:
+        raise HTTPException(502,"Provisioning selhal: "+str(exc))
+    # Register Portainer Agent only after WG and firewall have been verified.
+    try:
+        async with client() as c:
+            r=await c.post("/api/endpoints",data={"Name":result["name"],"EndpointCreationType":"2","URL":"tcp://"+result["management_ip"]+":9001","TLS":"true","TLSSkipVerify":"true"})
+        if r.status_code not in (200,201,409):
+            raise HTTPException(r.status_code,"Portainer registration failed: "+r.text)
+        if r.status_code in (200,201):
+            result["portainer_endpoint_id"]=(r.json() or {}).get("Id")
+            result["steps"].append("Portainer environment registered")
+        else:
+            result["steps"].append("Portainer environment already exists")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502,"WG je funkční, ale registrace do Portaineru selhala: "+str(exc))
+    return result
+"""
+        _run(target,docker,password,900)
+        steps.append("Docker + Portainer Agent OK")
+        fw=f"""systemctl enable --now nftables
+nft delete table inet dockerstackmover-bootstrap >/dev/null 2>&1 || true
+nft add table inet dockerstackmover-bootstrap
+nft 'add chain inet dockerstackmover-bootstrap input {{ type filter hook input priority -10; policy accept; }}'
+nft add rule inet dockerstackmover-bootstrap input ct state established,related accept
+nft add rule inet dockerstackmover-bootstrap input iifname lo accept
+nft add rule inet dockerstackmover-bootstrap input iifname wg-dsm ip saddr {hub_mgmt_ip} tcp dport '{{ 9001, 9100 }}' accept
+nft add rule inet dockerstackmover-bootstrap input tcp dport '{{ 9001, 9100 }}' drop"""
+        _run(target,fw,password)
+        steps.append("Management firewall OK")
+        # Test the exact central management path before returning success.
+        _run(hub,f"timeout 4 bash -lc '</dev/tcp/{mgmt_ip}/9001'")
+        steps.append("MAIN -> "+mgmt_ip+":9001 OK")
+        return {"ok":True,"name":name,"site":site,"role":role,"lan_ip":lan_ip,"management_ip":mgmt_ip,
+                "wireguard_public_key":peer_pub,"steps":steps}
+    finally:
+        try:
+            if target: target.close()
+        except Exception: pass
+        if hub:
+            try: hub.close()
+            except Exception: pass
+
+
+@app.post("/api/provisioning/server")
+async def provision_server(request: Request, session=Depends(require_csrf)):
+    if "admin" not in user_permissions(session.get("user","")):
+        raise HTTPException(403,"Permission denied")
+    payload=await request.json()
+    try:
+        result=await asyncio.to_thread(_provision,payload)
+    except Exception as exc:
+        raise HTTPException(502,"Provisioning selhal: "+str(exc))
+    # Register Portainer Agent only after WG and firewall have been verified.
+    try:
+        async with client() as c:
+            r=await c.post("/api/endpoints",data={"Name":result["name"],"EndpointCreationType":"2","URL":"tcp://"+result["management_ip"]+":9001","TLS":"true","TLSSkipVerify":"true"})
+        if r.status_code not in (200,201,409):
+            raise HTTPException(r.status_code,"Portainer registration failed: "+r.text)
+        if r.status_code in (200,201):
+            result["portainer_endpoint_id"]=(r.json() or {}).get("Id")
+            result["steps"].append("Portainer environment registered")
+        else:
+            result["steps"].append("Portainer environment already exists")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502,"WG je funkční, ale registrace do Portaineru selhala: "+str(exc))
+    return result
+"""
         _run(target,docker,password,900)
         steps.append("Docker + Portainer Agent OK")
         fw=f"""systemctl enable --now nftables
