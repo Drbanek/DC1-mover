@@ -48,14 +48,20 @@ async def migration_worker(job):
             pattern = re.compile(r'(?<![0-9.])' + re.escape(source_mgmt) + r'(?=:\\d+:)')
             stack_file, mgmt_rewrites = pattern.subn(target_mgmt, stack_file)
             rewritten_ports += mgmt_rewrites
-            if managed_proxy and mgmt_rewrites == 0:
+            if managed_proxy:
                 from .proxy import _inject_backend_publish
                 service = str(managed_proxy.get("service") or "")
                 container_port = int(managed_proxy.get("container_port") or 0)
                 backend_port = int(managed_proxy.get("backend_port") or 0)
                 if not service or not container_port or not backend_port:
                     raise RuntimeError("Managed proxy metadata nejsou kompletní; migrace byla zastavena před vypnutím zdroje.")
-                stack_file = _inject_backend_publish(stack_file, service, target_mgmt, backend_port, container_port)
+                # Always canonicalize the managed publish. A stale source bind
+                # must be removed even when an earlier textual rewrite matched
+                # some other occurrence of the source management IP.
+                stack_file = _inject_backend_publish(
+                    stack_file, service, target_mgmt, backend_port, container_port,
+                    replace_managed=True,
+                )
                 rewritten_ports += 1
         env = source_stack.get("Env") or []
         collision_message = "Cíl je volný"
