@@ -1,4 +1,6 @@
+import asyncio
 import ipaddress
+import os
 import secrets
 import shlex
 
@@ -134,3 +136,47 @@ exit 51
         "portainer_admin_password": admin_password,
         "password_is_one_time": True,
     }
+
+
+@app.get("/api/bootstrap/discovery")
+async def bootstrap_discovery(session=Depends(require_csrf)):
+    """Find SSH-capable hosts in the MGMT LAN without trying credentials."""
+    if "admin" not in user_permissions(session.get("user", "")):
+        raise HTTPException(403, "Permission denied")
+    host_ip = os.environ.get("DSM_HOST_IP", "").strip()
+    prefix = os.environ.get("DSM_HOST_PREFIX", "").strip()
+    try:
+        network = ipaddress.ip_network(f"{host_ip}/{prefix}", strict=False)
+    except ValueError:
+        raise HTTPException(500, "MGMT subnet není dostupný. Spusť DSM pomocí aktuálního install.sh.")
+    if network.version != 4 or network.num_addresses > 4096:
+        raise HTTPException(400, "Discovery podporuje IPv4 subnety do 4096 adres.")
+
+    sem = asyncio.Semaphore(128)
+
+    async def probe(ip):
+        async with sem:
+            try:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(str(ip), 22), timeout=0.45
+                )
+                banner = ""
+                try:
+                    banner = (await asyncio.wait_for(reader.readline(), timeout=0.25)).decode(
+                        "utf-8", "replace"
+                    ).strip()[:120]
+                except Exception:
+                    pass
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+                return {"ip": str(ip), "ssh": True, "banner": banner}
+            except Exception:
+                return None
+
+    found = await asyncio.gather(*(probe(ip) for ip in network.hosts()))
+    hosts = [x for x in found if x]
+    hosts.sort(key=lambda x: ipaddress.ip_address(x["ip"]))
+    return {"subnet": str(network), "hosts": hosts, "count": len(hosts)}
