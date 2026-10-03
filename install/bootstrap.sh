@@ -42,6 +42,7 @@ ask WG_HUB_ENDPOINT "MAIN WireGuard endpoint (host/IP:port)" ""
 ask WG_HUB_PUBKEY "MAIN WireGuard public key" ""
 ask WG_ADDRESS "Management overlay IPv4/CIDR tohoto serveru (např. 10.200.2.11/32)" ""
 ask WG_MAIN_IP "Management overlay IPv4 centrálního Portaineru" "10.200.0.8"
+ask WG_MANAGER_IP "Management overlay IPv4 DockerStackMoveru" "10.200.0.10"
 [[ -n "$WG_HUB_ENDPOINT" && -n "$WG_HUB_PUBKEY" && -n "$WG_ADDRESS" ]] || die "WireGuard údaje jsou povinné."
 python3 -c 'import ipaddress,sys; ipaddress.ip_interface(sys.argv[1]); ipaddress.ip_address(sys.argv[2])' "$WG_ADDRESS" "$WG_MAIN_IP" || die "Neplatná management IPv4/CIDR."
 echo
@@ -151,7 +152,7 @@ systemctl enable wg-quick@wg-dsm
 ok "WireGuard připraven; public key: $WG_PUB"
 
 say "Host firewall – management ochrana"
-systemctl enable --now nftables
+systemctl enable nftables
 nft delete table inet dockerstackmover-bootstrap >/dev/null 2>&1 || true
 FW_TMP=$(mktemp)
 cat >"$FW_TMP" <<EOF
@@ -160,7 +161,8 @@ table inet dockerstackmover-bootstrap {
   type filter hook input priority -10; policy accept;
   ct state established,related accept
   iifname "lo" accept
-  iifname "wg-dsm" ip saddr $WG_MAIN_IP tcp dport { 9001, 9100 } accept
+  iifname "wg-dsm" ip saddr $WG_MAIN_IP tcp dport 9001 accept
+  iifname "wg-dsm" ip saddr $WG_MANAGER_IP tcp dport 9100 accept
   tcp dport { 9001, 9100 } drop
  }
 }
@@ -168,7 +170,7 @@ EOF
 nft -c -f "$FW_TMP"
 nft -f "$FW_TMP"
 rm -f "$FW_TMP"
-ok "TCP 9001/9100 pouze přes wg-dsm z $WG_MAIN_IP."
+ok "TCP 9001 pouze z $WG_MAIN_IP; TCP 9100 pouze z $WG_MANAGER_IP přes wg-dsm."
 echo "Po registraci DockerStackMover převezme management firewall vlastním potvrzovacím/rollback mechanismem."
 
 echo
