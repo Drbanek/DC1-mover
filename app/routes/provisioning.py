@@ -224,6 +224,62 @@ docker inspect portainer_agent >/dev/null 2>&1
 docker port portainer_agent 9001/tcp | grep -q 9001"""
         _run(target,docker,password,900)
         steps.append("Docker + Portainer Agent OK"); progress("docker","done","Docker + Portainer Agent OK")
+        if role == "PROXY":
+            progress("proxy","running","Instaluji/opravuji Traefik reverse proxy…")
+            proxycmd = """install -d -m 755 /opt/traefik/dynamic /opt/traefik/letsencrypt /opt/traefik/config
+touch /opt/traefik/letsencrypt/acme.json
+chmod 600 /opt/traefik/letsencrypt/acme.json
+cat >/opt/traefik/config/traefik.yml <<'DSMTRAEFIK'
+api:
+  dashboard: false
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      storage: /letsencrypt/acme.json
+      httpChallenge:
+        entryPoint: web
+log:
+  level: INFO
+DSMTRAEFIK
+cat >/opt/traefik/compose.yaml <<'DSMCOMPOSE'
+services:
+  traefik:
+    image: traefik:v3.7
+    container_name: traefik
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /opt/traefik/config/traefik.yml:/etc/traefik/traefik.yml:ro
+      - /opt/traefik/dynamic:/etc/traefik/dynamic:ro
+      - /opt/traefik/letsencrypt:/letsencrypt
+DSMCOMPOSE
+cd /opt/traefik
+docker compose pull
+docker compose up -d
+for i in $(seq 1 30); do
+  [ "$(docker inspect -f '{{.State.Running}}' traefik 2>/dev/null || true)" = true ] && break
+  sleep 1
+done
+[ "$(docker inspect -f '{{.State.Running}}' traefik 2>/dev/null || true)" = true ]
+docker exec traefik traefik healthcheck >/dev/null 2>&1 || docker exec traefik traefik version >/dev/null
+test -d /opt/traefik/dynamic
+ss -lnt | grep -Eq '[:.]80[[:space:]]'
+ss -lnt | grep -Eq '[:.]443[[:space:]]'"""
+            _run(target,proxycmd,password,900)
+            steps.append("Traefik PROXY OK"); progress("proxy","done","Traefik běží · dynamic config OK · porty 80/443 naslouchají")
+        else:
+            progress("proxy","done","Role NODE · Traefik se neinstaluje")
         progress("firewall","running","Aplikuji management firewall…")
         fw=f"""# Keep DSM firewall isolated from the host-wide nftables service.
 # Loading /etc/nftables.conf can contain 'flush ruleset', which destroys Docker's
@@ -286,7 +342,7 @@ PROVISION_STEPS = [
     ("wg_key","WireGuard klíče"), ("wg_peer","Registrace peeru na MAIN"),
     ("wg_start","Spuštění WireGuardu"), ("wg_handshake","WireGuard handshake"),
     ("wg_forward","WireGuard forwarding"), ("data_disk","DATA disk /srv"),
-    ("docker","Docker + Portainer Agent"), ("firewall","Management firewall"),
+    ("docker","Docker + Portainer Agent"), ("proxy","Traefik PROXY"), ("firewall","Management firewall"),
     ("main_test","MAIN → Portainer Agent"), ("portainer","Registrace v Portaineru")
 ]
 

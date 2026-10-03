@@ -157,12 +157,24 @@ async def node_readiness(endpoint):
         "data_disk": {"ok": False, "message": "/srv capacity unavailable"},
         "migration": {"ok": bool(settings.get("migration_enabled")), "message": "Enabled" if settings.get("migration_enabled") else "Disabled"},
         "firewall": {"ok": False, "message": "Not verified"},
+        "proxy": {"ok": False, "message": "Traefik not verified"},
     }
     try:
         info = await docker_request(endpoint_id, "GET", "/info")
         checks["docker"] = {"ok": info.status_code == 200, "message": "Online" if info.status_code == 200 else "HTTP " + str(info.status_code)}
     except Exception as exc:
         checks["docker"]["message"] = str(exc)
+    if role == "PROXY":
+        try:
+            traefik = await docker_request(endpoint_id, "GET", "/containers/traefik/json")
+            if traefik.status_code == 200:
+                state = (traefik.json().get("State") or {})
+                running = bool(state.get("Running"))
+                checks["proxy"] = {"ok": running, "message": "Traefik running" if running else "Traefik container is not running"}
+            else:
+                checks["proxy"] = {"ok": False, "message": "Traefik container not found"}
+        except Exception as exc:
+            checks["proxy"] = {"ok": False, "message": str(exc)}
     if settings.get("agent_url") and settings.get("agent_token"):
         try:
             data_disk, system_disk = await agent_disk_usage(endpoint_id)
@@ -173,7 +185,12 @@ async def node_readiness(endpoint):
         try:
             fw=await agent_firewall(endpoint_id); checks["firewall"]={"ok":bool(fw.get("managed")),"message":"Managed by DockerStackMover" if fw.get("managed") else "Not managed"}
         except Exception as exc: checks["firewall"]={"ok":False,"message":str(exc)}
-    required = ("docker","host_ip","capacity_agent","data_disk","migration","firewall") if role == "NODE" else ("docker","host_ip")
+    if role == "NODE":
+        required = ("docker","host_ip","capacity_agent","data_disk","migration","firewall")
+    elif role == "PROXY":
+        required = ("docker","host_ip","proxy")
+    else:
+        required = ("docker","host_ip")
     ready = all(checks[k]["ok"] for k in required)
     return {"id": endpoint_id, "name": endpoint.get("Name") or ("Endpoint " + str(endpoint_id)), "ready": ready,
             "status": "ready" if ready else "setup_required", "host_ip": host_ip, "host_ip_source": host_ip_source,
