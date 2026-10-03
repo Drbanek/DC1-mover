@@ -150,6 +150,9 @@ async def node_readiness(endpoint):
     settings = get_endpoint_settings().get(endpoint_id, {})
     role = (settings.get("role") or "NONE").upper()
     host_ip, host_ip_source = endpoint_host_ip(endpoint)
+    if role == "PORTAINER" and not host_ip:
+        host_ip = (setting_get("wg_hub_lan_ip", "") or "").strip() or "10.200.0.8"
+        host_ip_source = "wg_hub"
     checks = {
         "docker": {"ok": False, "message": "Docker API unavailable"},
         "host_ip": {"ok": bool(host_ip), "message": host_ip or "Host IP could not be detected"},
@@ -189,6 +192,8 @@ async def node_readiness(endpoint):
         required = ("docker","host_ip","capacity_agent","data_disk","migration","firewall")
     elif role == "PROXY":
         required = ("docker","host_ip","proxy")
+    elif role == "PORTAINER":
+        required = ("docker","host_ip")
     else:
         required = ("docker","host_ip")
     ready = all(checks[k]["ok"] for k in required)
