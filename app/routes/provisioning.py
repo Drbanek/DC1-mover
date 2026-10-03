@@ -140,7 +140,7 @@ sleep 2
 docker rm -f portainer_agent >/dev/null 2>&1 || true
 docker pull portainer/agent:2.45.1
 docker run -d --name portainer_agent --restart=always -p 9001:9001 -v /var/run/docker.sock:/var/run/docker.sock -v /var/lib/docker/volumes:/var/lib/docker/volumes -v /:/host portainer/agent:2.45.1 >/dev/null
-docker ps --filter name=portainer_agent --filter status=running --format '{{.Names}}' | grep -qx portainer_agent
+docker inspect portainer_agent >/dev/null 2>&1
 docker port portainer_agent 9001/tcp | grep -q 9001"""
         _run(target,docker,password,900)
         steps.append("Docker + Portainer Agent OK")
