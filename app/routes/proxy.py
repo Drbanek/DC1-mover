@@ -23,41 +23,63 @@ def _site_proxy(site):
 
 
 async def _run_proxy_helper(proxy_id, cmd, env=None, host_network=False, binds=None):
-    image = "alpine:3.22"
-    await ensure_image(proxy_id, image)
+    """Run a short-lived helper through Portainer's stack API.
+
+    Portainer performs the Docker create/start locally on the endpoint, avoiding
+    Docker POST /containers/{id}/start through the reverse proxy.
+    """
     name = "dsm-proxy-" + uuid.uuid4().hex[:10]
-    payload = {
-        "Image": image,
-        "Cmd": ["sh", "-ec", cmd],
-        "Env": env or [],
-        "HostConfig": {"AutoRemove": False}
-    }
+    environment = {}
+    for item in (env or []):
+        key, _, value = item.partition("=")
+        environment[key] = value
+    service = [
+        "services:",
+        "  helper:",
+        "    image: alpine:3.22",
+        "    command: [\"sh\", \"-ec\", " + json.dumps(cmd) + "]",
+        "    restart: \"no\"",
+    ]
     if host_network:
-        payload["HostConfig"]["NetworkMode"] = "host"
+        service.append("    network_mode: host")
+    if environment:
+        service.append("    environment:")
+        for key, value in environment.items():
+            service.append("      " + key + ": " + json.dumps(value))
     if binds:
-        payload["HostConfig"]["Binds"] = binds
-    created = await docker_request(proxy_id, "POST", "/containers/create", params={"name": name}, json=payload)
-    if created.status_code != 201:
-        raise RuntimeError("PROXY helper create failed: " + created.text)
-    cid = created.json()["Id"]
+        service.append("    volumes:")
+        for bind in binds:
+            service.append("      - " + json.dumps(bind))
+    stack_file = "\n".join(service) + "\n"
+    stack = await create_target_stack(proxy_id, name, stack_file, [])
+    stack_id = int(stack.get("Id") or stack.get("id") or 0)
+    if not stack_id:
+        raise RuntimeError("PROXY helper stack did not return an ID")
     try:
-        started = await docker_request(proxy_id, "POST", "/containers/" + cid + "/start")
-        if started.status_code not in (204, 304):
-            raise RuntimeError("PROXY helper start failed: " + started.text)
         code = None
+        logs_text = ""
         for _ in range(60):
-            state = (await docker_get(proxy_id, "/containers/" + cid + "/json")).json().get("State") or {}
-            if not state.get("Running"):
-                code = int(state.get("ExitCode") or 0)
-                break
+            containers = (await docker_get(proxy_id, "/containers/json", params={"all": "1", "filters": json.dumps({"label": ["com.docker.compose.project=" + name]})})).json()
+            if containers:
+                state = str(containers[0].get("State") or "").lower()
+                status = str(containers[0].get("Status") or "")
+                if state == "exited":
+                    match = re.search(r"Exited \((\d+)\)", status)
+                    code = int(match.group(1)) if match else 1
+                    if code != 0:
+                        cid = containers[0].get("Id")
+                        if cid:
+                            logs = await docker_request(proxy_id, "GET", "/containers/" + cid + "/logs", params={"stdout": "1", "stderr": "1"})
+                            logs_text = logs.text[-1000:]
+                    break
             await asyncio.sleep(0.5)
         if code is None:
             raise RuntimeError("PROXY helper timeout")
         if code != 0:
-            logs = await docker_request(proxy_id, "GET", "/containers/" + cid + "/logs", params={"stdout": "1", "stderr": "1"})
-            raise RuntimeError("PROXY helper failed (" + str(code) + "): " + logs.text[-1000:])
+            raise RuntimeError("PROXY helper failed (" + str(code) + "): " + logs_text)
     finally:
-        await remove_container(proxy_id, cid)
+        async with client() as hc:
+            await hc.delete("/api/stacks/" + str(stack_id), params={"endpointId": proxy_id})
 
 
 async def _write_dynamic_file(proxy_id, filename, content):
