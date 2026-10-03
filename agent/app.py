@@ -92,9 +92,9 @@ def firewall_apply(policy: FirewallPolicy, x_agent_token: str | None = Header(de
   tcp dport {{ {pts} }} drop
  }}
 }}"""
-    subprocess.run(["nft","delete","table","inet","dockerstackmover"],capture_output=True,text=True)
     check=subprocess.run(["nft","-c","-f","-"],input=rules,text=True,capture_output=True,timeout=10)
     if check.returncode: raise HTTPException(400,(check.stderr or check.stdout)[:500])
+    subprocess.run(["nft","delete","table","inet","dockerstackmover"],capture_output=True,text=True)
     try: nft(["-f","-"],rules)
     except Exception:
         restore_snapshot(before); raise
