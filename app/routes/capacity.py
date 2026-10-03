@@ -46,6 +46,7 @@ async def install_capacity_agent(endpoint_id: int, session=Depends(require_csrf)
     if not endpoint:
         raise HTTPException(404, "Endpoint not found")
     settings = get_endpoint_settings().get(endpoint_id, {})
+    role = settings.get("role","NODE").upper()
     host_ip, host_ip_source = endpoint_host_ip(endpoint)
     if not host_ip:
         raise HTTPException(400, "Host IP se nepodařilo zjistit z Portainer endpointu. Nastav ji ručně v Endpoint settings.")
@@ -93,7 +94,7 @@ async def install_capacity_agent(endpoint_id: int, session=Depends(require_csrf)
                 payload = capacity.json()
                 if int((payload.get("data") or {}).get("total") or 0) > 0 and int((payload.get("system") or {}).get("total") or 0) > 0:
                     save_endpoint_setting(endpoint_id, bool(settings.get("migration_enabled")), host_ip,
-                        settings.get("site", ""), settings.get("public_ip", ""), agent_url, token)
+                        settings.get("site", ""), settings.get("public_ip", ""), agent_url, token, settings.get("role","NODE"))
                     return {"ok": True, "agent_url": agent_url, "image": CAPACITY_AGENT_IMAGE, "host_ip": host_ip, "host_ip_source": host_ip_source}
             last_error = "health=" + str(health.status_code) + ", capacity=" + str(capacity.status_code)
         except Exception as exc:
@@ -151,10 +152,11 @@ async def node_readiness(endpoint):
         try:
             fw=await agent_firewall(endpoint_id); checks["firewall"]={"ok":bool(fw.get("managed")),"message":"Managed by DockerStackMover" if fw.get("managed") else "Not managed"}
         except Exception as exc: checks["firewall"]={"ok":False,"message":str(exc)}
-    ready = all(checks[k]["ok"] for k in ("docker", "host_ip", "capacity_agent", "data_disk", "migration", "firewall"))
+    required = ("docker","host_ip","capacity_agent","data_disk","migration","firewall") if role == "NODE" else ("host_ip","capacity_agent","firewall")
+    ready = all(checks[k]["ok"] for k in required)
     return {"id": endpoint_id, "name": endpoint.get("Name") or ("Endpoint " + str(endpoint_id)), "ready": ready,
             "status": "ready" if ready else "setup_required", "host_ip": host_ip, "host_ip_source": host_ip_source,
-            "site": settings.get("site", ""), "public_ip": settings.get("public_ip", ""), "checks": checks}
+            "site": settings.get("site", ""), "public_ip": settings.get("public_ip", ""), "role": role, "checks": checks, "required_checks": list(required)}
 
 @app.get("/api/nodes/readiness")
 async def nodes_readiness(session=Depends(require_permission("dashboard_read"))):
@@ -181,7 +183,7 @@ async def prepare_node(endpoint_id: int, session=Depends(require_csrf)):
     if not host_ip:
         raise HTTPException(400, "Host IP se nepodařilo automaticky zjistit. Nastav ji ručně jako override.")
     save_endpoint_setting(endpoint_id, True, settings.get("host_ip", ""), settings.get("site", ""),
-                          settings.get("public_ip", ""), settings.get("agent_url", ""), None)
+                          settings.get("public_ip", ""), settings.get("agent_url", ""), None, settings.get("role","NODE"))
     # Reuse the hardened installer; it persists generated credentials only after verification.
     await install_capacity_agent(endpoint_id, session)
     return await node_readiness(endpoint)
