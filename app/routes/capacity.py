@@ -70,6 +70,8 @@ async def install_capacity_agent(endpoint_id: int, session=Depends(require_csrf)
                 "CapDrop": ["ALL"],
                 "CapAdd": ["NET_ADMIN"],
                 "NetworkMode": "host",
+                "PidMode": "host",
+                "Privileged": False,
                 "RestartPolicy": {"Name": "unless-stopped", "MaximumRetryCount": 0}
             }
         })
