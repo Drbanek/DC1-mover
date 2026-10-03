@@ -144,7 +144,7 @@ if ! iptables -t nat -S DOCKER >/dev/null 2>&1; then
     sleep 1
   done
 fi
-iptables -t nat -S DOCKER >/dev/null 2>&1 || { echo "Docker NAT chain DOCKER is unavailable after restart" >&2; exit 1; }
+iptables -t nat -S DOCKER >/dev/null 2>&1 || (echo "Docker NAT chain DOCKER is unavailable after restart" >&2; exit 1)
 docker pull portainer/agent:2.45.1
 docker rm -f portainer_agent >/dev/null 2>&1 || true
 docker run -d --name portainer_agent --restart=always -p 9001:9001 -v /var/run/docker.sock:/var/run/docker.sock -v /var/lib/docker/volumes:/var/lib/docker/volumes -v /:/host portainer/agent:2.45.1 >/dev/null
