@@ -63,11 +63,13 @@ async def install_capacity_agent(endpoint_id: int, session=Depends(require_csrf)
             "ExposedPorts": {"9100/tcp": {}},
             "HostConfig": {
                 "Binds": ["/srv:/host/srv:ro", "/var/lib/docker:/host/docker:ro"],
-                "PortBindings": {"9100/tcp": [{"HostIp": host_ip, "HostPort": "9100"}]},
+                
                 "ReadonlyRootfs": True,
                 "Tmpfs": {"/tmp": "rw,noexec,nosuid,size=16m"},
                 "SecurityOpt": ["no-new-privileges:true"],
                 "CapDrop": ["ALL"],
+                "CapAdd": ["NET_ADMIN"],
+                "NetworkMode": "host",
                 "RestartPolicy": {"Name": "unless-stopped", "MaximumRetryCount": 0}
             }
         })
@@ -100,6 +102,25 @@ async def install_capacity_agent(endpoint_id: int, session=Depends(require_csrf)
 
 
 
+async def agent_firewall(endpoint_id, method="GET", payload=None):
+    settings=get_endpoint_settings().get(int(endpoint_id),{}); url=(settings.get("agent_url") or "").rstrip("/"); token=settings.get("agent_token") or ""
+    if not url or not token: raise RuntimeError("Node Agent is not configured")
+    async with httpx.AsyncClient(timeout=8) as hc:
+        r=await hc.request(method,url+"/firewall",headers={"X-Agent-Token":token},json=payload)
+    if r.status_code != 200: raise RuntimeError("Firewall Agent HTTP "+str(r.status_code)+": "+r.text[:300])
+    return r.json()
+
+@app.get("/api/endpoints/{endpoint_id}/firewall")
+async def firewall_status(endpoint_id:int,session=Depends(require_permission("admin"))):
+    return await agent_firewall(endpoint_id)
+
+@app.put("/api/endpoints/{endpoint_id}/firewall")
+async def firewall_apply(endpoint_id:int,request:Request,session=Depends(require_csrf)):
+    if "admin" not in user_permissions(session.get("user","")): raise HTTPException(403,"Permission denied")
+    p=await request.json(); sources=[str(x).strip() for x in p.get("management_sources",[]) if str(x).strip()]
+    ports=p.get("management_ports") or [9001,9100]
+    return await agent_firewall(endpoint_id,"PUT",{"management_sources":sources,"management_ports":ports})
+
 async def node_readiness(endpoint):
     """Return an actionable readiness report for any Portainer endpoint."""
     endpoint_id = int(endpoint["Id"])
@@ -111,6 +132,7 @@ async def node_readiness(endpoint):
         "capacity_agent": {"ok": False, "message": "Not configured"},
         "data_disk": {"ok": False, "message": "/srv capacity unavailable"},
         "migration": {"ok": bool(settings.get("migration_enabled")), "message": "Enabled" if settings.get("migration_enabled") else "Disabled"},
+        "firewall": {"ok": False, "message": "Not verified"},
     }
     try:
         info = await docker_request(endpoint_id, "GET", "/info")
@@ -124,7 +146,10 @@ async def node_readiness(endpoint):
             checks["data_disk"] = {"ok": True, "message": fmt_bytes(data_disk["free"]) + " free", "free": data_disk["free"], "total": data_disk["total"]}
         except Exception as exc:
             checks["capacity_agent"] = {"ok": False, "message": str(exc)}
-    ready = all(checks[k]["ok"] for k in ("docker", "host_ip", "capacity_agent", "data_disk", "migration"))
+        try:
+            fw=await agent_firewall(endpoint_id); checks["firewall"]={"ok":bool(fw.get("managed")),"message":"Managed by DockerStackMover" if fw.get("managed") else "Not managed"}
+        except Exception as exc: checks["firewall"]={"ok":False,"message":str(exc)}
+    ready = all(checks[k]["ok"] for k in ("docker", "host_ip", "capacity_agent", "data_disk", "migration", "firewall"))
     return {"id": endpoint_id, "name": endpoint.get("Name") or ("Endpoint " + str(endpoint_id)), "ready": ready,
             "status": "ready" if ready else "setup_required", "host_ip": host_ip, "host_ip_source": host_ip_source,
             "site": settings.get("site", ""), "public_ip": settings.get("public_ip", ""), "checks": checks}
