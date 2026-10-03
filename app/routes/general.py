@@ -2,7 +2,7 @@ from ..core import *
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "1.14.2"}
+    return {"status": "ok", "version": "1.14.3"}
 
 @app.get("/api/inventory")
 async def inventory(session=Depends(require_permission("migrations"))):
@@ -93,16 +93,14 @@ async def endpoint_remove(endpoint_id: int, request: Request, session=Depends(re
     mgmt_ip = str(setting.get("host_ip") or "").strip()
     if not all((hub_host, hub_user, hub_password, mgmt_ip)):
         raise HTTPException(400, "Pro bezpečné odebrání je potřeba SSH přístup na MAIN WireGuard HUB.")
-    # Deprovision only DockerStackMover-managed system containers. Workload
-    # containers/stacks were already rejected by the pre-flight above.
+    # Remove managed containers that do not carry Portainer's connection first.
+    # portainer_agent itself must NOT be deleted through the Portainer Docker
+    # proxy: doing so cuts the request transport and Portainer returns
+    # "Proxy failure / Unexpected EOF". It is removed directly over SSH below.
     role = (check.get("role") or "").upper()
-    managed_containers = ["portainer_agent"]
-    if role == "NODE":
-        managed_containers.insert(0, "dockerstackmover-capacity-agent")
-    elif role == "PROXY":
-        managed_containers.insert(0, "traefik")
     removed_containers = []
-    for container_name in managed_containers:
+    proxy_removals = ["dockerstackmover-capacity-agent"] if role == "NODE" else (["traefik"] if role == "PROXY" else [])
+    for container_name in proxy_removals:
         r = await docker_request(endpoint_id, "DELETE", "/containers/" + container_name,
                                  params={"force": "1", "v": "0"})
         if r.status_code in (204, 404):
@@ -110,6 +108,27 @@ async def endpoint_remove(endpoint_id: int, request: Request, session=Depends(re
                 removed_containers.append(container_name)
             continue
         raise HTTPException(502, "Nelze odstranit systémový kontejner " + container_name + ": " + r.text)
+
+    # The target SSH connection is intentionally required for the final
+    # self-removal of portainer_agent. Use the management address while the WG
+    # peer still exists; LAN IP is a fallback for repaired/legacy endpoints.
+    target_host = mgmt_ip or str(setting.get("lan_ip") or "").strip()
+    target_user = str(payload.get("target_ssh_user") or hub_user).strip()
+    target_password = str(payload.get("target_ssh_password") or hub_password)
+    target_port = int(payload.get("target_ssh_port") or 22)
+    if not all((target_host, target_user, target_password)):
+        raise HTTPException(400, "Pro odebrání Portainer Agentu je potřeba SSH přístup na odebíraný server.")
+    try:
+        from .provisioning import _ssh, _run
+        target = _ssh(target_host, target_port, target_user, target_password)
+        try:
+            _run(target, "docker rm -f portainer_agent >/dev/null 2>&1 || true", target_password)
+            removed_containers.append("portainer_agent")
+        finally:
+            target.close()
+    except Exception as exc:
+        raise HTTPException(502, "Portainer Agent se nepodařilo odebrat přes SSH: " + str(exc))
+
     try:
         from .provisioning import _ssh, _run
         hub = _ssh(hub_host, hub_port, hub_user, hub_password)
