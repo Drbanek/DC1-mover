@@ -37,6 +37,8 @@ case "$ROLE_N" in
   *) die "Neplatná role." ;;
 esac
 TARGET_IP="$BASE.$LAST"
+PORTAINER_EXT=$((9000+LAST)); NODE_AGENT_EXT=$((9100+LAST))
+ask PUBLIC_IP "Veřejná IPv4 lokality (prázdné = pouze LAN)" ""
 echo
 echo "Rozhraní: $DEF_IF  Aktuální: $CIDR  Gateway: $GW"
 echo "Cíl: $HOSTNAME_NEW  $TARGET_IP/$PREFIX  Role: $ROLE  Site: $SITE"
@@ -147,9 +149,18 @@ echo "Po registraci DockerStackMover převezme management firewall (9001/9100) v
 echo
 echo "============================================================"
 echo "PŘIPRAVENO: $HOSTNAME_NEW"
-echo "Po aplikaci IP bude Portainer Agent: $TARGET_IP:9001"
-echo "V centrálním Portaineru přidej environment: $HOSTNAME_NEW -> $TARGET_IP:9001"
-echo "V DockerStackMover nastav: Site=$SITE, Role=$ROLE, Host IP=$TARGET_IP"
+echo "Po aplikaci IP bude Portainer Agent lokálně: $TARGET_IP:9001"
+if [[ -n "$PUBLIC_IP" ]]; then
+ echo "Pro REMOTE lokalitu nastav na edge routeru DST-NAT:"
+ echo "  $PUBLIC_IP:$PORTAINER_EXT/TCP -> $TARGET_IP:9001"
+ echo "  $PUBLIC_IP:$NODE_AGENT_EXT/TCP -> $TARGET_IP:9100   (po instalaci Node Agentu)"
+ echo "V centrálním Portaineru přidej environment: $HOSTNAME_NEW -> $PUBLIC_IP:$PORTAINER_EXT"
+ echo "V DockerStackMover nastav: Site=$SITE, Role=$ROLE, Host IP=$TARGET_IP, Public IP=$PUBLIC_IP"
+ echo "Agent URL nastav před 'Připravit': http://$PUBLIC_IP:$NODE_AGENT_EXT"
+else
+ echo "V centrálním Portaineru přidej environment: $HOSTNAME_NEW -> $TARGET_IP:9001"
+ echo "V DockerStackMover nastav: Site=$SITE, Role=$ROLE, Host IP=$TARGET_IP"
+fi
 [[ "$ROLE" == NODE ]] && echo "Poté použij Připravit NODE – nainstaluje Node Agent a nastaví spravovaný firewall."
 [[ "$ROLE" == PROXY ]] && echo "Poté použij Připravit server – Node Agent zajistí firewall; Traefik bude spravován jako PROXY."
 echo "============================================================"
