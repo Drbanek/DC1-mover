@@ -58,7 +58,6 @@ async def endpoint_remove_check(endpoint_id: int, session=Depends(require_permis
     # dynamic Traefik files. The helper mounts the host directory read-only.
     proxy_files = []
     try:
-        from .proxy import _run_proxy_helper
         # We cannot return stdout from the helper, so use the Traefik container's
         # mounted dynamic directory through Docker exec for a read-only listing.
         traefik = next((x for x in containers if "traefik" in [n.lstrip("/") for n in (x.get("Names") or [])]), None)
