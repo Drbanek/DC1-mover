@@ -72,7 +72,11 @@ def _provision(payload, progress=None):
         steps.append("SSH target OK"); progress("ssh","done","SSH target OK")
         progress("preflight","running","Kontroluji Ubuntu, route a sudo…")
         pre=_run(target,"source /etc/os-release; test \"$ID\" = ubuntu; ip -4 route show default | head -1; command -v sudo >/dev/null")
-        steps.append("Pre-flight OK: "+pre.splitlines()[-1]); progress("preflight","done","Pre-flight OK: "+pre.splitlines()[-1])
+        existing_docker=_run(target,"if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then echo yes; else echo no; fi",password)=="yes"
+        existing_agent=_run(target,"if command -v docker >/dev/null 2>&1 && docker ps -a --format '{{.Names}}' | grep -qx portainer_agent; then echo yes; else echo no; fi",password)=="yes"
+        repair_mode=existing_docker or existing_agent
+        mode_detail="REPAIR existujícího serveru" if repair_mode else "nový server"
+        steps.append("Pre-flight OK: "+pre.splitlines()[-1]+" · "+mode_detail); progress("preflight","done","Pre-flight OK · "+mode_detail)
         if host != lan_ip:
             progress("lan","running","Nastavuji LAN IP "+lan_ip+"…")
             netcmd=f"""IF=$(ip -4 route show default | awk 'NR==1{{print $5}}'); GW=$(ip -4 route show default | awk 'NR==1{{print $3}}'); CIDR=$(ip -o -4 addr show dev "$IF" scope global | awk 'NR==1{{print $4}}'); PREFIX="${{CIDR#*/}}"; test "$PREFIX" = 24; cat >/etc/netplan/99-dockerstackmover.yaml <<EOF
@@ -162,6 +166,11 @@ ROOT_SRC=$(findmnt -no SOURCE /)
 ROOT_DISK=$(lsblk -s -npo NAME,TYPE "$ROOT_SRC" 2>/dev/null | awk '$2=="disk"{print $1; exit}')
 [ -n "$ROOT_DISK" ] || exit 40
 REQUESTED=__DATA_DISK__
+REPAIR_MODE=__REPAIR_MODE__
+if [ "$REPAIR_MODE" = yes ] && [ "$REQUESTED" = AUTO ]; then
+  echo "REPAIR: /srv není samostatně připojené. Automatické formátování DATA disku je z bezpečnostních důvodů zakázáno; nejdřív ověř data a zadej disk explicitně." >&2
+  exit 46
+fi
 if [ "$REQUESTED" = AUTO ]; then
   CANDIDATES=""
   while read -r DEV TYPE; do
@@ -198,6 +207,7 @@ chmod 2775 /srv/stacks
 echo "CREATED $DISK -> $PART -> /srv"
 """
             diskcmd = diskcmd.replace("__DATA_DISK__", shlex.quote(data_disk or "AUTO"))
+            diskcmd = diskcmd.replace("__REPAIR_MODE__", "yes" if repair_mode else "no")
             disk_result = _run(target,diskcmd,password,900)
             disk_detail=disk_result.splitlines()[-1]
             steps.append("DATA disk OK: "+disk_detail); progress("data_disk","done","DATA disk OK: "+disk_detail)
@@ -303,9 +313,9 @@ async def provision_server_stream(request: Request, session=Depends(require_csrf
             # Move it to the WireGuard management address instead of merely accepting HTTP 409.
             if r.status_code == 409:
                 async with client() as uc:
-                    ur=await uc.put("/api/endpoints/"+str(endpoint_id),data={
+                    ur=await uc.put("/api/endpoints/"+str(endpoint_id),json={
                         "Name":result["name"],"URL":"tcp://"+result["management_ip"]+":9001",
-                        "TLS":"true","TLSSkipVerify":"true","TLSSkipClientVerify":"true"
+                        "TLS":True,"TLSSkipVerify":True,"TLSSkipClientVerify":True
                     })
                 if ur.status_code not in (200,204):
                     yield json.dumps({"type":"error","step":"portainer","detail":"Existující Portainer endpoint se nepodařilo přepnout na management IP: "+ur.text},ensure_ascii=False)+"\n"; return
@@ -348,9 +358,9 @@ async def provision_server(request: Request, session=Depends(require_csrf)):
             raise HTTPException(502,"Portainer endpoint existuje, ale nepodařilo se zjistit jeho ID pro uložení nastavení.")
         if r.status_code == 409:
             async with client() as uc:
-                ur=await uc.put("/api/endpoints/"+str(endpoint_id),data={
+                ur=await uc.put("/api/endpoints/"+str(endpoint_id),json={
                     "Name":result["name"],"URL":"tcp://"+result["management_ip"]+":9001",
-                    "TLS":"true","TLSSkipVerify":"true","TLSSkipClientVerify":"true"
+                    "TLS":True,"TLSSkipVerify":True,"TLSSkipClientVerify":True
                 })
             if ur.status_code not in (200,204):
                 raise HTTPException(502,"Existující Portainer endpoint se nepodařilo přepnout na management IP: "+ur.text)
