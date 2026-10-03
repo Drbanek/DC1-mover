@@ -30,6 +30,11 @@ async def _stack_preflight(stack_id: int, target_id: int):
     add("volumes",not existing,"Volume names available" if not existing else "Existing volumes: "+", ".join(existing))
     binds=sorted({m.get("source") for c in detail["containers"] for m in c.get("mounts",[]) if m.get("type")=="bind" and m.get("source")})
     add("bind_mounts",not binds,"No host bind mounts" if not binds else "Host bind mounts require manual validation: "+", ".join(binds),"warning")
+    if detail.get("domains"):
+        es=get_endpoint_settings(); ts=es.get(int(target_id),{}); site=(ts.get("site") or "").strip().upper(); lan=(ts.get("lan_ip") or "").strip()
+        proxies=[s for s in es.values() if (s.get("role") or "").upper()=="PROXY" and (s.get("site") or "").strip().upper()==site]
+        add("proxy_lan_ip",bool(lan),"Target LAN IP: "+lan if lan else "Target LAN IP is required for application proxy traffic")
+        add("proxy_site",bool(site) and len(proxies)==1,"Traefik PROXY ready for "+site if site and len(proxies)==1 else "Target site must have exactly one PROXY endpoint")
     cap=await node_capacity(target)
     add("data_capacity",bool(cap.get("data_disk")),"DATA /srv capacity available" if cap.get("data_disk") else "DATA /srv capacity unavailable")
     images=sorted({c.get("image") for c in detail["containers"] if c.get("image")})
