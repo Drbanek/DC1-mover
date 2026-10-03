@@ -128,6 +128,7 @@ async def node_readiness(endpoint):
     """Return an actionable readiness report for any Portainer endpoint."""
     endpoint_id = int(endpoint["Id"])
     settings = get_endpoint_settings().get(endpoint_id, {})
+    role = (settings.get("role") or "NODE").upper()
     host_ip, host_ip_source = endpoint_host_ip(endpoint)
     checks = {
         "docker": {"ok": False, "message": "Docker API unavailable"},
