@@ -128,6 +128,7 @@ def init_db():
             conn.execute("ALTER TABLE endpoint_settings ADD COLUMN role TEXT NOT NULL DEFAULT 'NONE'")
         if "lan_ip" not in columns:
             conn.execute("ALTER TABLE endpoint_settings ADD COLUMN lan_ip TEXT")
+        conn.execute("CREATE TABLE IF NOT EXISTS stack_proxy_settings (stack_name TEXT PRIMARY KEY, host TEXT NOT NULL, service TEXT, container_port INTEGER, backend_port INTEGER, https INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL)")
         conn.execute("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, secret INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)")
         conn.execute("CREATE TABLE IF NOT EXISTS app_users (username TEXT PRIMARY KEY, password_hash TEXT NOT NULL, updated_at TEXT NOT NULL)")
         user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(app_users)").fetchall()}
@@ -152,6 +153,23 @@ def save_endpoint_setting(endpoint_id, migration_enabled, host_ip="", site="", p
             role=excluded.role, lan_ip=CASE WHEN excluded.lan_ip != '' THEN excluded.lan_ip ELSE endpoint_settings.lan_ip END, updated_at=excluded.updated_at
         """, (int(endpoint_id), 1 if migration_enabled else 0, (host_ip or "").strip(), (site or "").strip(), (public_ip or "").strip(),
               (agent_url or "").strip().rstrip("/"), agent_token, (role or "NONE").upper(), (lan_ip or "").strip(), utcnow()))
+
+def get_stack_proxy_setting(stack_name):
+    with db() as conn:
+        row = conn.execute("SELECT * FROM stack_proxy_settings WHERE stack_name = ?", (str(stack_name),)).fetchone()
+    return dict(row) if row else None
+
+def save_stack_proxy_setting(stack_name, host, service="", container_port=None, backend_port=None, https=True):
+    with db() as conn:
+        conn.execute("""INSERT INTO stack_proxy_settings(stack_name,host,service,container_port,backend_port,https,updated_at)
+            VALUES(?,?,?,?,?,?,?) ON CONFLICT(stack_name) DO UPDATE SET host=excluded.host, service=excluded.service,
+            container_port=excluded.container_port, backend_port=excluded.backend_port, https=excluded.https, updated_at=excluded.updated_at""",
+            (str(stack_name), str(host).strip().lower().rstrip("."), str(service or ""), int(container_port) if container_port else None,
+             int(backend_port) if backend_port else None, 1 if https else 0, utcnow()))
+
+def delete_stack_proxy_setting(stack_name):
+    with db() as conn:
+        conn.execute("DELETE FROM stack_proxy_settings WHERE stack_name = ?", (str(stack_name),))
 
 def migration_endpoints(endpoints):
     settings = get_endpoint_settings()
@@ -361,9 +379,16 @@ async def build_detail(stack_id):
             v = r.json(); volumes.append({"name": v.get("Name"), "driver": v.get("Driver"), "mountpoint": v.get("Mountpoint")})
         else: volumes.append({"name": volume_name, "driver": "unknown", "mountpoint": None})
     domains = []
-    for container in containers:
-        labels = container["labels"]
-        if labels.get("dc1.proxy.enable") == "true": domains.append({"host": labels.get("dc1.proxy.host"), "port": labels.get("dc1.proxy.port"), "scheme": labels.get("dc1.proxy.scheme", "http")})
+    managed_proxy = get_stack_proxy_setting(stack["Name"])
+    if managed_proxy:
+        domains.append({"host": managed_proxy.get("host"), "port": managed_proxy.get("backend_port"),
+                        "container_port": managed_proxy.get("container_port"), "service": managed_proxy.get("service"),
+                        "scheme": "http", "https": bool(managed_proxy.get("https")), "managed": True})
+    else:
+        for container in containers:
+            labels = container["labels"]
+            if labels.get("dc1.proxy.enable") == "true":
+                domains.append({"host": labels.get("dc1.proxy.host"), "port": labels.get("dc1.proxy.port"), "scheme": labels.get("dc1.proxy.scheme", "http")})
     endpoint_name = endpoint["Name"] if endpoint else "Endpoint " + str(endpoint_id)
     return {"stack": {"id": stack["Id"], "name": stack["Name"], "endpoint_id": endpoint_id, "endpoint": endpoint_name, "status": stack["Status"]}, "containers": containers, "volumes": volumes, "domains": domains}
 
