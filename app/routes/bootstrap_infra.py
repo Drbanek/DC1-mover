@@ -1,3 +1,5 @@
+import subprocess
+import os
 import asyncio
 import ipaddress
 import os
@@ -296,6 +298,16 @@ systemctl enable --now wg-quick@wg-dsm
             peer_cmd = "wg set wg-dsm peer " + shlex.quote(mgmt_pub) + " allowed-ips 10.200.0.10/32; " + \
                        "wg-quick save wg-dsm >/dev/null"
             _run(conn, peer_cmd, password)
+
+            # Activate the host-side MGMT peer through a narrowly scoped helper
+            # mounted by install.sh. The application container never receives
+            # host sudo or the Docker socket.
+            helper = "/host-tools/configure-mgmt-wireguard"
+            if not os.path.exists(helper):
+                raise RuntimeError("MGMT WireGuard helper chybí. Aktualizuj MGMT pomocí aktuálního install.sh.")
+            proc = subprocess.run([helper, hub_pub, wg_endpoint], text=True, capture_output=True, timeout=60)
+            if proc.returncode != 0:
+                raise RuntimeError("MGMT WireGuard aktivace selhala: " + (proc.stderr or proc.stdout)[-300:])
             emit("wireguard", "done", "WG HUB 10.200.0.8 + MGMT 10.200.0.10 připraveny")
 
             emit("portainer", "running", "Instaluji Portainer Server")
