@@ -119,3 +119,24 @@ async function showFirewall(endpointId,name){
   w.document.getElementById("editFw").onclick=()=>{w.opener.configureFirewall(endpointId)};
  }catch(e){alert("Firewall nelze načíst: "+e.message)}
 }
+
+
+async function provisionServer(){
+ const b=document.getElementById("provButton"),state=document.getElementById("provState");
+ const payload={name:document.getElementById("provName").value,site:document.getElementById("provSite").value,role:document.getElementById("provRole").value,
+  host:document.getElementById("provHost").value,lan_ip:document.getElementById("provLanIp").value,management_ip:document.getElementById("provMgmtIp").value,
+  ssh_user:document.getElementById("provUser").value,ssh_password:document.getElementById("provPassword").value,
+  hub_host:document.getElementById("provHubHost").value,hub_ssh_user:document.getElementById("provHubUser").value,hub_ssh_password:document.getElementById("provHubPassword").value,
+  hub_endpoint:document.getElementById("provHubEndpoint").value,hub_management_ip:"10.200.0.8"};
+ if(!payload.host||!payload.lan_ip||!payload.management_ip||!payload.ssh_password||!payload.hub_ssh_password){alert("Vyplň SSH adresu, LAN/management IP a obě SSH hesla.");return}
+ if(!confirm("Připravit "+(payload.name||payload.host)+"?\n\nPo ověření WireGuardu budou porty 9001/9100 dostupné pouze přes management overlay."))return;
+ b.disabled=true;state.textContent="Provisioning běží – SSH, WireGuard, Docker, firewall, Portainer…";
+ try{
+  const r=await fetch("/api/provisioning/server",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":csrfToken},body:JSON.stringify(payload)});
+  const raw=await r.text();if(!r.ok)throw new Error(raw);const d=JSON.parse(raw);
+  state.innerHTML="<span style='color:#86efac'>✓ "+esc(d.name)+" připraven</span><br>"+d.steps.map(x=>"✓ "+esc(x)).join("<br>")+"<br>Management: "+esc(d.management_ip);
+  document.getElementById("provPassword").value="";document.getElementById("provHubPassword").value="";
+  await loadEndpointSettings();await loadReadiness();
+ }catch(e){state.innerHTML="<span class='error'>"+esc(e.message)+"</span>";}
+ finally{b.disabled=false}
+}
