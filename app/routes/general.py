@@ -2,7 +2,7 @@ from ..core import *
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "1.9.0"}
+    return {"status": "ok", "version": "1.10.1"}
 
 @app.get("/api/inventory")
 async def inventory(session=Depends(require_permission("migrations"))):
@@ -17,7 +17,7 @@ async def endpoint_settings_list(session=Depends(require_permission("admin"))):
     endpoints = await get_endpoints(); settings = get_endpoint_settings(); result = []
     for endpoint in endpoints:
         eid = int(endpoint["Id"]); setting = settings.get(eid, {})
-        result.append({"id": eid, "name": endpoint.get("Name") or ("Endpoint " + str(eid)), "url": endpoint.get("URL") or "", "migration_enabled": bool(setting.get("migration_enabled", False)), "host_ip": setting.get("host_ip", ""), "site": setting.get("site", ""), "public_ip": setting.get("public_ip", ""), "agent_url": setting.get("agent_url", ""), "agent_token_set": bool(setting.get("agent_token"))})
+        result.append({"id": eid, "name": endpoint.get("Name") or ("Endpoint " + str(eid)), "url": endpoint.get("URL") or "", "migration_enabled": bool(setting.get("migration_enabled", False)), "host_ip": setting.get("host_ip", ""), "site": setting.get("site", ""), "public_ip": setting.get("public_ip", ""), "agent_url": setting.get("agent_url", ""), "agent_token_set": bool(setting.get("agent_token")), "role": (setting.get("role") or "NONE").upper()})
     return result
 
 @app.put("/api/endpoints/{endpoint_id}/settings")
@@ -25,7 +25,7 @@ async def endpoint_settings_save(endpoint_id: int, request: Request, session=Dep
     if "admin" not in user_permissions(session.get("user","")): raise HTTPException(403,"Permission denied")
     endpoints = await get_endpoints()
     if not any(int(e["Id"]) == endpoint_id for e in endpoints): raise HTTPException(404, "Endpoint not found")
-    payload = await request.json(); save_endpoint_setting(endpoint_id, bool(payload.get("migration_enabled")), str(payload.get("host_ip") or ""), str(payload.get("site") or ""), str(payload.get("public_ip") or ""), str(payload.get("agent_url") or ""), str(payload["agent_token"]) if payload.get("agent_token") else None)
+    payload = await request.json(); save_endpoint_setting(endpoint_id, bool(payload.get("migration_enabled")), str(payload.get("host_ip") or ""), str(payload.get("site") or ""), str(payload.get("public_ip") or ""), str(payload.get("agent_url") or ""), str(payload["agent_token"]) if payload.get("agent_token") else None, str(payload.get("role") or "NONE").upper())
     return {"ok": True}
 
 @app.get("/api/stacks/{stack_id}/targets")
