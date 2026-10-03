@@ -403,7 +403,7 @@ async def provision_server_stream(request: Request, session=Depends(require_csrf
                 detail="Portainer environment repaired → "+result["management_ip"]
             result["portainer_endpoint_id"]=endpoint_id
             agent_url="http://"+result["management_ip"]+":9100" if result["role"]=="NODE" else ""
-            save_endpoint_setting(endpoint_id, result["role"]=="NODE", result["management_ip"], result["site"], "", agent_url, role=result["role"], lan_ip=result["lan_ip"])
+            save_endpoint_setting(endpoint_id, result["role"]=="NODE", result["management_ip"], result["site"], str(payload.get("public_ip") or "").strip(), agent_url, role=result["role"], lan_ip=result["lan_ip"])
             detail += " · nastavení endpointu uloženo"
             result["steps"].append(detail)
             yield json.dumps({"type":"progress","step":"portainer","status":"done","detail":detail},ensure_ascii=False)+"\n"
@@ -447,7 +447,7 @@ async def provision_server(request: Request, session=Depends(require_csrf)):
                 raise HTTPException(502,"Existující Portainer endpoint se nepodařilo přepnout na management IP: "+ur.text)
         result["portainer_endpoint_id"]=endpoint_id
         agent_url="http://"+result["management_ip"]+":9100" if result["role"]=="NODE" else ""
-        save_endpoint_setting(endpoint_id, result["role"]=="NODE", result["management_ip"], result["site"], "", agent_url, role=result["role"])
+        save_endpoint_setting(endpoint_id, result["role"]=="NODE", result["management_ip"], result["site"], str(payload.get("public_ip") or "").strip(), agent_url, role=result["role"], lan_ip=result["lan_ip"])
         result["steps"].append(("Portainer environment registered" if r.status_code in (200,201) else "Portainer environment already exists")+" · nastavení endpointu uloženo")
     except HTTPException:
         raise
