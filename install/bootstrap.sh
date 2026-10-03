@@ -80,8 +80,9 @@ ok "$HOSTNAME_NEW"
 
 if [[ "$ROLE" == NODE ]]; then
   say "DATA disk"
-  ROOT_SRC=$(findmnt -no SOURCE /); ROOT_PARENT=$(lsblk -no PKNAME "$ROOT_SRC" 2>/dev/null || true)
-  mapfile -t CAND < <(lsblk -dpno NAME,TYPE | awk '$2=="disk"{print $1}' | grep -v "/dev/$ROOT_PARENT" || true)
+  ROOT_SRC=$(findmnt -no SOURCE /); ROOT_DISK=$(lsblk -s -npo NAME,TYPE "$ROOT_SRC" 2>/dev/null | awk '$2=="disk"{print $1; exit}')
+  [[ -n "$ROOT_DISK" ]] || die "Nelze zjistit systémový disk."
+  mapfile -t CAND < <(lsblk -dpno NAME,TYPE | awk '$2=="disk"{print $1}' | grep -vx "$ROOT_DISK" || true)
   lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINTS
   ask DATA_DISK "DATA disk" "${CAND[0]:-}"
   [[ -b "$DATA_DISK" ]] || die "Disk $DATA_DISK neexistuje."
