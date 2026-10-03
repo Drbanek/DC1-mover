@@ -225,18 +225,43 @@ docker port portainer_agent 9001/tcp | grep -q 9001"""
         _run(target,docker,password,900)
         steps.append("Docker + Portainer Agent OK"); progress("docker","done","Docker + Portainer Agent OK")
         progress("firewall","running","Aplikuji management firewall…")
-        fw=f"""systemctl enable nftables
-mkdir -p /etc/nftables.d
+        fw=f"""# Keep DSM firewall isolated from the host-wide nftables service.
+# Loading /etc/nftables.conf can contain 'flush ruleset', which destroys Docker's
+# DOCKER-* chains while dockerd is still running. Persist only our own table.
+mkdir -p /etc/dockerstackmover
+cat >/etc/dockerstackmover/firewall.nft <<'DSMFW'
+table inet dockerstackmover-bootstrap {{
+ chain input {{
+  type filter hook input priority -10; policy accept;
+  ct state established,related accept
+  iifname lo accept
+  iifname "wg-dsm" ip saddr {hub_mgmt_ip} tcp dport 9001 accept
+  iifname "wg-dsm" ip saddr {manager_mgmt_ip} tcp dport 9100 accept
+  tcp dport {{ 9001, 9100 }} drop
+ }}
+}}
+DSMFW
+nft -c -f /etc/dockerstackmover/firewall.nft
 nft delete table inet dockerstackmover-bootstrap >/dev/null 2>&1 || true
-nft add table inet dockerstackmover-bootstrap
-nft 'add chain inet dockerstackmover-bootstrap input {{ type filter hook input priority -10; policy accept; }}'
-nft add rule inet dockerstackmover-bootstrap input ct state established,related accept
-nft add rule inet dockerstackmover-bootstrap input iifname lo accept
-nft add rule inet dockerstackmover-bootstrap input iifname wg-dsm ip saddr {hub_mgmt_ip} tcp dport 9001 accept
-nft add rule inet dockerstackmover-bootstrap input iifname wg-dsm ip saddr {manager_mgmt_ip} tcp dport 9100 accept
-nft add rule inet dockerstackmover-bootstrap input tcp dport '{{ 9001, 9100 }}' drop
-nft list table inet dockerstackmover-bootstrap >/etc/nftables.d/dockerstackmover-bootstrap.nft
-grep -qF 'include \"/etc/nftables.d/*.nft\"' /etc/nftables.conf || echo 'include \"/etc/nftables.d/*.nft\"' >>/etc/nftables.conf
+nft -f /etc/dockerstackmover/firewall.nft
+cat >/etc/systemd/system/dockerstackmover-firewall.service <<'DSMSVC'
+[Unit]
+Description=DockerStackMover management firewall
+After=network-online.target docker.service
+Wants=network-online.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c '/usr/sbin/nft delete table inet dockerstackmover-bootstrap >/dev/null 2>&1 || true; /usr/sbin/nft -f /etc/dockerstackmover/firewall.nft'
+[Install]
+WantedBy=multi-user.target
+DSMSVC
+systemctl daemon-reload
+systemctl enable dockerstackmover-firewall.service
+# Remove only the legacy DSM include/file; never reload the host-wide ruleset.
+rm -f /etc/nftables.d/dockerstackmover-bootstrap.nft
+sed -i '\\|include "/etc/nftables.d/\\*.nft"|d' /etc/nftables.conf 2>/dev/null || true
+iptables -t filter -S DOCKER-FORWARD >/dev/null
 docker port portainer_agent 9001/tcp | grep -q 9001"""
         _run(target,fw,password)
         steps.append("Management firewall OK"); progress("firewall","done","Management firewall OK")
