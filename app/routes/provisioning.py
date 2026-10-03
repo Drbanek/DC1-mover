@@ -10,7 +10,7 @@ import uuid
 import paramiko
 from fastapi import Depends, HTTPException, Request
 
-from ..core import app, require_csrf, user_permissions, client
+from ..core import app, require_csrf, user_permissions, client, save_endpoint_setting
 
 
 def _ssh(host, port, username, password):
@@ -288,6 +288,19 @@ async def provision_server_stream(request: Request, session=Depends(require_csrf
             if r.status_code not in (200,201,409):
                 yield json.dumps({"type":"error","step":"portainer","detail":"Portainer registration failed: "+r.text},ensure_ascii=False)+"\n"; return
             detail="Portainer environment registered" if r.status_code in (200,201) else "Portainer environment already exists"
+            endpoint_id=(r.json() or {}).get("Id") if r.status_code in (200,201) else None
+            if endpoint_id is None:
+                async with client() as ec:
+                    er=await ec.get("/api/endpoints")
+                if er.status_code==200:
+                    match=next((e for e in er.json() if str(e.get("Name") or "").upper()==str(result["name"]).upper()),None)
+                    endpoint_id=(match or {}).get("Id")
+            if endpoint_id is None:
+                yield json.dumps({"type":"error","step":"portainer","detail":"Portainer endpoint existuje, ale nepodařilo se zjistit jeho ID pro uložení nastavení."},ensure_ascii=False)+"\n"; return
+            result["portainer_endpoint_id"]=endpoint_id
+            agent_url="http://"+result["management_ip"]+":9100" if result["role"]=="NODE" else ""
+            save_endpoint_setting(endpoint_id, result["role"]=="NODE", result["management_ip"], result["site"], "", agent_url, role=result["role"])
+            detail += " · nastavení endpointu uloženo"
             result["steps"].append(detail)
             yield json.dumps({"type":"progress","step":"portainer","status":"done","detail":detail},ensure_ascii=False)+"\n"
             yield json.dumps({"type":"result","result":result},ensure_ascii=False)+"\n"
@@ -311,11 +324,19 @@ async def provision_server(request: Request, session=Depends(require_csrf)):
             r=await c.post("/api/endpoints",data={"Name":result["name"],"EndpointCreationType":"2","URL":"tcp://"+result["management_ip"]+":9001","TLS":"true","TLSSkipVerify":"true","TLSSkipClientVerify":"true"})
         if r.status_code not in (200,201,409):
             raise HTTPException(r.status_code,"Portainer registration failed: "+r.text)
-        if r.status_code in (200,201):
-            result["portainer_endpoint_id"]=(r.json() or {}).get("Id")
-            result["steps"].append("Portainer environment registered")
-        else:
-            result["steps"].append("Portainer environment already exists")
+        endpoint_id=(r.json() or {}).get("Id") if r.status_code in (200,201) else None
+        if endpoint_id is None:
+            async with client() as ec:
+                er=await ec.get("/api/endpoints")
+            if er.status_code==200:
+                match=next((e for e in er.json() if str(e.get("Name") or "").upper()==str(result["name"]).upper()),None)
+                endpoint_id=(match or {}).get("Id")
+        if endpoint_id is None:
+            raise HTTPException(502,"Portainer endpoint existuje, ale nepodařilo se zjistit jeho ID pro uložení nastavení.")
+        result["portainer_endpoint_id"]=endpoint_id
+        agent_url="http://"+result["management_ip"]+":9100" if result["role"]=="NODE" else ""
+        save_endpoint_setting(endpoint_id, result["role"]=="NODE", result["management_ip"], result["site"], "", agent_url, role=result["role"])
+        result["steps"].append(("Portainer environment registered" if r.status_code in (200,201) else "Portainer environment already exists")+" · nastavení endpointu uloženo")
     except HTTPException:
         raise
     except Exception as exc:
