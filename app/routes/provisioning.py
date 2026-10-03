@@ -322,7 +322,7 @@ async def provision_server_stream(request: Request, session=Depends(require_csrf
                 detail="Portainer environment repaired → "+result["management_ip"]
             result["portainer_endpoint_id"]=endpoint_id
             agent_url="http://"+result["management_ip"]+":9100" if result["role"]=="NODE" else ""
-            save_endpoint_setting(endpoint_id, result["role"]=="NODE", result["management_ip"], result["site"], "", agent_url, role=result["role"])
+            save_endpoint_setting(endpoint_id, result["role"]=="NODE", result["management_ip"], result["site"], "", agent_url, role=result["role"], lan_ip=result["lan_ip"])
             detail += " · nastavení endpointu uloženo"
             result["steps"].append(detail)
             yield json.dumps({"type":"progress","step":"portainer","status":"done","detail":detail},ensure_ascii=False)+"\n"
