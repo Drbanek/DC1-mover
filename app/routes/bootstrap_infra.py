@@ -3,6 +3,7 @@ import ipaddress
 import os
 import secrets
 import shlex
+import json
 
 import httpx
 from fastapi import Depends, HTTPException, Request
@@ -20,12 +21,19 @@ async def bootstrap_portainer(request: Request, session=Depends(require_csrf)):
     user = str(p.get("ssh_user") or "").strip()
     password = str(p.get("ssh_password") or "")
     site = str(p.get("site") or "MAIN").strip().upper()
-    lan_ip = str(p.get("lan_ip") or host).strip()
-    wg_endpoint = str(p.get("wg_endpoint") or (lan_ip + ":51820")).strip()
-    public_ip = str(p.get("public_ip") or "").strip()
+    try:
+        host_addr = ipaddress.ip_address(host)
+        if host_addr.version != 4:
+            raise ValueError("IPv4 required")
+        parts = host.split(".")
+        lan_ip = ".".join(parts[:3] + ["8"])
+    except ValueError as exc:
+        raise HTTPException(400, "Neplatná SSH IPv4 adresa: " + str(exc))
+    wg_endpoint = lan_ip + ":51820"
+    public_ip = ""
     ssh_port = int(p.get("ssh_port") or 22)
-    if not host or not user or not password or not lan_ip:
-        raise HTTPException(400, "Vyplň SSH adresu, uživatele, heslo a LAN IP Portaineru.")
+    if not host or not user or not password or not site:
+        raise HTTPException(400, "Vyplň lokalitu, SSH adresu, uživatele a heslo.")
     try:
         ipaddress.ip_address(host)
         ipaddress.ip_address(lan_ip)
