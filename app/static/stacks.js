@@ -3,27 +3,30 @@ async function loadStacks(){const table=document.getElementById("stacks");table.
 async function showDetail(id){loadAdvisor(id);selectedStackId=Number(id);document.getElementById("movePanel").style.display="none";const detail=document.getElementById("detail");detail.style.display="block";document.getElementById("detailTitle").textContent="Načítám...";try{const data=await getJson("/api/stacks/"+Number(id)+"/detail");selectedDetail=data;document.getElementById("detailTitle").textContent="Detail: "+data.stack.name;document.getElementById("node").textContent=data.stack.endpoint;document.getElementById("containerCount").textContent=data.containers.length;document.getElementById("volumeCount").textContent=data.volumes.length;const domains=document.getElementById("domains");domains.innerHTML="";if(data.domains.length===0)domains.innerHTML='<div class="muted">Žádná proxy doména</div>';else {data.domains.forEach(function(domain){const item=document.createElement("div");item.className="item domain";item.textContent=domain.scheme+"://"+domain.host+" → port "+domain.port;domains.appendChild(item)});await syncStackProxy(id,domains)}const containers=document.getElementById("containers");containers.innerHTML="";data.containers.forEach(function(container){const item=document.createElement("div");item.className="item";const title=document.createElement("strong");title.textContent=container.name;const image=document.createElement("div");image.className="muted";image.textContent=container.image;const status=document.createElement("div");status.textContent=container.status;item.appendChild(title);item.appendChild(image);item.appendChild(status);containers.appendChild(item)});const volumes=document.getElementById("volumes");volumes.innerHTML="";if(data.volumes.length===0)volumes.innerHTML='<div class="muted">Žádné named volumes</div>';else data.volumes.forEach(function(volume){const item=document.createElement("div");item.className="item";const title=document.createElement("strong");title.textContent=volume.name;const driver=document.createElement("div");driver.className="muted";driver.textContent="Driver: "+volume.driver;item.appendChild(title);item.appendChild(driver);volumes.appendChild(item)});detail.scrollIntoView({behavior:"smooth"})}catch(error){document.getElementById("detailTitle").textContent="Chyba";document.getElementById("containers").innerHTML='<div class="error">'+esc(error.message)+"</div>"}}
 async function openMove(){if(!selectedStackId||!selectedDetail)return;const panel=document.getElementById("movePanel");panel.style.display="block";document.getElementById("moveTitle").textContent="Přesunout: "+selectedDetail.stack.name;document.getElementById("moveSource").textContent=selectedDetail.stack.endpoint;document.getElementById("preflight").innerHTML="";const select=document.getElementById("targetSelect");select.innerHTML='<option>Načítám...</option>';try{const data=await getJson("/api/stacks/"+selectedStackId+"/targets");select.innerHTML="";if(data.targets.length===0){const option=document.createElement("option");option.textContent="Žádný dostupný cílový NODE";option.value="";select.appendChild(option)}else data.targets.forEach(function(target){const option=document.createElement("option");option.value=target.id;option.textContent=target.name;select.appendChild(option)});panel.scrollIntoView({behavior:"smooth"})}catch(error){select.innerHTML="";document.getElementById("preflight").innerHTML='<div class="error item">'+esc(error.message)+"</div>"}}
 function closeMove(){document.getElementById("movePanel").style.display="none"}
+const preflightSteps=[["source_target","Zdroj a cíl"],["target_ready","Připravenost cíle"],["stack_name","Kolize názvu stacku"],["ports","Kolize portů"],["volumes","Kolize volumes"],["bind_mounts","Bind mounty"],["proxy_lan_ip","Proxy LAN IP"],["proxy_site","Proxy lokality"],["data_capacity","Kapacita DATA /srv"]];
+function renderPreflightProgress(box){
+ box.innerHTML="<div style='margin-top:12px'><strong>Průběh pre-flight kontroly</strong></div>"+preflightSteps.map((x,i)=>"<div id='preflight-step-"+x[0]+"' style='padding:3px 0'><span class='preflightIcon' style='display:inline-block;width:22px'>"+(i===0?"◌":"○")+"</span><span>"+esc(x[1])+"</span><small class='muted preflightDetail' style='margin-left:8px'></small></div>").join("");
+}
+function updatePreflightStep(id,status,detail){
+ const row=document.getElementById("preflight-step-"+id);if(!row)return;
+ const icon=row.querySelector(".preflightIcon"),d=row.querySelector(".preflightDetail");
+ icon.textContent=status==="done"?"✓":status==="error"?"✕":status==="warning"?"!":"◌";
+ icon.style.color=status==="done"?"#86efac":status==="error"?"#f87171":status==="warning"?"#fbbf24":"";
+ if(d&&detail)d.textContent=detail;
+ if(status==="done"||status==="warning"){let n=row.nextElementSibling;if(n){const ni=n.querySelector(".preflightIcon");if(ni&&ni.textContent==="○")ni.textContent="◌"}}
+}
 async function runPreflight(){
  const targetId=Number(document.getElementById("targetSelect").value),box=document.getElementById("preflight");
  if(!targetId){box.innerHTML='<div class="error item">Vyber cílový NODE.</div>';return}
- box.innerHTML="<div style='margin-top:12px'><strong>Průběh pre-flight kontroly</strong></div><div style='padding:3px 0'><span style='display:inline-block;width:22px'>◌</span><span>Načítám kontroly migrace…</span></div>";
+ renderPreflightProgress(box);
  try{
-  const data=await getJson("/api/stacks/"+selectedStackId+"/preflight-v2/"+targetId);
-  box.innerHTML="<div style='margin-top:12px'><strong>Pre-flight kontrola</strong></div>";
-  data.checks.forEach(function(check){
-   const warning=check.level==="warning"||check.severity==="warning";
-   const ok=!!check.ok;
-   const icon=ok?"✓":warning?"!":"✕";
-   const color=ok?"#86efac":warning?"#fbbf24":"#f87171";
-   const row=document.createElement("div");row.style.padding="3px 0";
-   const iconBox=document.createElement("span");iconBox.style.display="inline-block";iconBox.style.width="22px";iconBox.style.color=color;iconBox.textContent=icon;
-   const title=document.createElement("span");title.textContent=check.name;
-   const detail=document.createElement("small");detail.className="muted";detail.style.marginLeft="8px";detail.textContent=check.message||"";
-   row.appendChild(iconBox);row.appendChild(title);row.appendChild(detail);box.appendChild(row);
-  });
+  const r=await fetch("/api/stacks/"+selectedStackId+"/preflight-v2/"+targetId+"/stream",{cache:"no-store"});
+  if(!r.ok)throw new Error(await r.text());
+  const reader=r.body.getReader(),decoder=new TextDecoder();let buf="",data=null;
+  while(true){const z=await reader.read();if(z.done)break;buf+=decoder.decode(z.value,{stream:true});const lines=buf.split("\\n");buf=lines.pop();for(const line of lines){if(!line.trim())continue;const e=JSON.parse(line);if(e.type==="progress")updatePreflightStep(e.step,e.status,e.detail||"");else if(e.type==="error")throw new Error(e.detail||"Pre-flight selhal");else if(e.type==="result")data=e.result}}
+  if(!data)throw new Error("Pre-flight skončil bez výsledku.");
   const result=document.createElement("div");result.style.marginTop="10px";result.className=data.ready?"ready":"notReady";
-  result.textContent=data.ready?"✓ Připraveno k migraci. Můžeš spustit bezpečný přesun.":"✕ Migrace zatím není připravena. Nejdřív oprav neúspěšné kontroly.";
-  box.appendChild(result);
+  result.textContent=data.ready?"✓ Připraveno k migraci. Můžeš spustit bezpečný přesun.":"✕ Migrace zatím není připravena. Nejdřív oprav neúspěšné kontroly.";box.appendChild(result);
   if(data.ready){const actions=document.createElement("div");actions.className="actions";const migrate=document.createElement("button");migrate.className="success";migrate.textContent="Zahájit bezpečný přesun";migrate.onclick=function(){startMigration(targetId)};actions.appendChild(migrate);box.appendChild(actions)}
- }catch(error){box.innerHTML='<div class="error item">'+esc(error.message)+"</div>"}
+ }catch(error){const err=document.createElement("div");err.className="error";err.style.marginTop="8px";err.textContent=error.message;box.appendChild(err)}
 }
