@@ -193,6 +193,106 @@ async def nodes_readiness(session=Depends(require_permission("dashboard_read")))
             result.append({"id": endpoint.get("Id"), "name": endpoint.get("Name"), "ready": False, "status": "error", "error": str(exc)})
     return {"nodes": result}
 
+
+@app.post("/api/endpoints/{endpoint_id}/prepare/stream")
+async def prepare_node_stream(endpoint_id: int, session=Depends(require_csrf)):
+    """Prepare a NODE and stream individual readiness steps to the UI."""
+    if "admin" not in user_permissions(session.get("user", "")):
+        raise HTTPException(403, "Permission denied")
+
+    async def events():
+        def ev(step, status, detail=""):
+            return json.dumps({"type":"progress","step":step,"status":status,"detail":detail},ensure_ascii=False)+"\n"
+        try:
+            yield ev("endpoint","running","Načítám endpoint a jeho nastavení…")
+            endpoints = await get_endpoints()
+            endpoint = next((e for e in endpoints if int(e.get("Id")) == endpoint_id), None)
+            if not endpoint:
+                yield ev("endpoint","error","Endpoint nebyl nalezen."); return
+            settings = get_endpoint_settings().get(endpoint_id, {})
+            host_ip, source = endpoint_host_ip(endpoint)
+            if not host_ip:
+                yield ev("endpoint","error","Host IP se nepodařilo zjistit."); return
+            yield ev("endpoint","done","Endpoint OK · "+host_ip)
+
+            yield ev("migration","running","Povoluji endpoint pro migrace…")
+            save_endpoint_setting(endpoint_id, True, settings.get("host_ip", ""), settings.get("site", ""),
+                                  settings.get("public_ip", ""), settings.get("agent_url", ""), None, settings.get("role","NODE"))
+            yield ev("migration","done","Migrace povoleny")
+
+            yield ev("image","running","Stahuji/ověřuji image Capacity Agentu…")
+            await ensure_image(endpoint_id, CAPACITY_AGENT_IMAGE)
+            yield ev("image","done","Capacity Agent image připraven")
+
+            yield ev("container","running","Vytvářím Capacity Agent kontejner…")
+            existing = await _agent_container(endpoint_id)
+            if existing:
+                await remove_container(endpoint_id, CAPACITY_AGENT_CONTAINER)
+            token = secrets.token_hex(32)
+            create = await docker_request(endpoint_id, "POST", "/containers/create",
+                params={"name": CAPACITY_AGENT_CONTAINER},
+                json={"Image": CAPACITY_AGENT_IMAGE,"Env":["AGENT_TOKEN="+token],"ExposedPorts":{"9100/tcp":{}},
+                      "HostConfig":{"Binds":["/srv:/host/srv:ro","/var/lib/docker:/host/docker:ro"],
+                      "ReadonlyRootfs":True,"Tmpfs":{"/tmp":"rw,noexec,nosuid,size=16m"},
+                      "SecurityOpt":["no-new-privileges:true"],"CapDrop":["ALL"],"CapAdd":["NET_ADMIN"],
+                      "NetworkMode":"host","PidMode":"host","Privileged":False,
+                      "RestartPolicy":{"Name":"unless-stopped","MaximumRetryCount":0}}})
+            if create.status_code != 201:
+                yield ev("container","error","Capacity Agent create failed: "+create.text); return
+            container_id=create.json()["Id"]
+            start=await docker_request(endpoint_id,"POST","/containers/"+container_id+"/start",json={})
+            if start.status_code not in (204,304):
+                await remove_container(endpoint_id,container_id)
+                yield ev("container","error","Capacity Agent start failed: "+start.text); return
+            yield ev("container","done","Capacity Agent spuštěn")
+
+            agent_url=(settings.get("agent_url") or "").strip().rstrip("/") or ("http://"+host_ip+":9100")
+            yield ev("health","running","Čekám na "+agent_url+"/health…")
+            last_error=""
+            verified=False
+            for _ in range(15):
+                try:
+                    async with httpx.AsyncClient(timeout=3) as hc:
+                        health=await hc.get(agent_url+"/health")
+                        capacity=await hc.get(agent_url+"/capacity",headers={"X-Agent-Token":token})
+                    if health.status_code==200 and capacity.status_code==200:
+                        payload=capacity.json()
+                        if int((payload.get("data") or {}).get("total") or 0)>0 and int((payload.get("system") or {}).get("total") or 0)>0:
+                            verified=True; break
+                    last_error="health="+str(health.status_code)+", capacity="+str(capacity.status_code)
+                except Exception as exc:
+                    last_error=str(exc)
+                await asyncio.sleep(1)
+            if not verified:
+                await remove_container(endpoint_id,container_id)
+                yield ev("health","error","Capacity Agent se nepodařilo ověřit: "+last_error); return
+            save_endpoint_setting(endpoint_id, True, host_ip, settings.get("site",""), settings.get("public_ip",""),
+                                  agent_url, token, settings.get("role","NODE"))
+            yield ev("health","done","Capacity Agent odpovídá na 9100")
+
+            yield ev("disk","running","Ověřuji DATA /srv a systémový disk…")
+            data_disk, system_disk = await agent_disk_usage(endpoint_id)
+            yield ev("disk","done","DATA /srv: "+fmt_bytes(data_disk["free"])+" volno")
+
+            yield ev("firewall","running","Ověřuji správu firewallu přes Node Agent…")
+            try:
+                fw=await agent_firewall(endpoint_id)
+                if fw.get("managed"):
+                    yield ev("firewall","done","Firewall spravuje DockerStackMover")
+                else:
+                    yield ev("firewall","error","Firewall zatím není spravován DockerStackMoverem"); return
+            except Exception as exc:
+                yield ev("firewall","error",str(exc)); return
+
+            readiness=await node_readiness(endpoint)
+            if not readiness.get("ready"):
+                yield json.dumps({"type":"error","detail":"NODE po přípravě stále nesplňuje všechny readiness kontroly.","result":readiness},ensure_ascii=False)+"\n"; return
+            yield json.dumps({"type":"result","result":readiness},ensure_ascii=False)+"\n"
+        except Exception as exc:
+            yield json.dumps({"type":"error","detail":"Příprava NODE selhala: "+str(exc)},ensure_ascii=False)+"\n"
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(events(),media_type="application/x-ndjson",headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
+
 @app.post("/api/endpoints/{endpoint_id}/prepare")
 async def prepare_node(endpoint_id: int, session=Depends(require_csrf)):
     """Enable migrations and install/repair the Capacity Agent in one action."""
