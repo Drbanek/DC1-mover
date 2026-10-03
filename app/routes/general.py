@@ -122,7 +122,7 @@ async def endpoint_remove(endpoint_id: int, request: Request, session=Depends(re
         from .provisioning import _ssh, _run
         target = _ssh(target_host, target_port, target_user, target_password)
         try:
-            out = _run(target, "docker rm -f portainer_agent >/dev/null 2>&1 || true", target_password)
+            _run(target, "docker rm -f portainer_agent >/dev/null 2>&1 || true", target_password)
             removed_containers.append("portainer_agent")
         finally:
             target.close()
