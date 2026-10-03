@@ -4,7 +4,7 @@ from ..core import *
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "1.14.5"}
+    return {"status": "ok", "version": "1.14.6"}
 
 @app.get("/api/inventory")
 async def inventory(session=Depends(require_permission("migrations"))):
@@ -126,13 +126,14 @@ if [ -n "$WORKLOAD" ]; then
 fi
 """
             if role == "PROXY":
-                # BusyBox/Alpine compatibility is irrelevant here: this runs on
-                # the Ubuntu host. Avoid GNU find -printf anyway so the safety
-                # check stays portable and its failure is visible.
+                # Dynamic dsm-*.yml files are generated state, not workload.
+                # Once the host itself is verified to contain no application
+                # containers, they are safe to treat as orphaned configuration
+                # and remove during deprovisioning.
                 inspect_script += r"""
-FILES=$(find /opt/traefik/dynamic -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -print 2>/dev/null | sed 's#.*/##' || true)
-if [ -n "$FILES" ]; then
-  printf 'PROXYFILES:%s\\n' "$FILES" >&2
+FOREIGN=$(find /opt/traefik/dynamic -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) ! -name 'dsm-*.yml' -print 2>/dev/null | sed 's#.*/##' || true)
+if [ -n "$FOREIGN" ]; then
+  printf 'PROXYFILES:%s\\n' "$FOREIGN" >&2
   exit 43
 fi
 """
@@ -146,6 +147,8 @@ fi
                     raise HTTPException(409, "PROXY obsahuje aktivní Traefik konfiguraci a nelze jej odebrat. " + msg)
                 raise RuntimeError(msg) from exc
             # Cleanup is deliberately idempotent: missing containers are OK.
+            if role == "PROXY":
+                _run(target, "find /opt/traefik/dynamic -maxdepth 1 -type f -name 'dsm-*.yml' -delete 2>/dev/null || true", target_password)
             names = ["portainer_agent", "dockerstackmover-capacity-agent"] if role == "NODE" else ["portainer_agent", "traefik"]
             _run(target, "docker rm -f " + " ".join(shlex.quote(x) for x in names) + " >/dev/null 2>&1 || true", target_password)
         finally:
