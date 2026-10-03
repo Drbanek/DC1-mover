@@ -1,8 +1,9 @@
 from ..core import *
 from .general import *
+from .proxy import sync_stack_proxy, remove_stack_proxy
 
 async def migration_worker(job):
-    stack_id = job["stack_id"]; target_id = job["target_id"]; source_stopped = False; created_volumes = []; dns_changes = []
+    stack_id = job["stack_id"]; target_id = job["target_id"]; source_stopped = False; created_volumes = []; dns_changes = []; target_proxy_configured = False
     try:
         job["status"] = "running"; persist_job(job); job_step(job, "Příprava", "running", "Načítám zdroj a cíl")
         detail = await build_detail(stack_id); endpoints = await get_endpoints(); stacks = await get_stacks(); source_id = detail["stack"]["endpoint_id"]
@@ -64,6 +65,11 @@ async def migration_worker(job):
                 job_step(job, "Ověření cíle", "ok", str(len(migrated)) + " kontejner(y) běží a healthcheck je v pořádku"); break
             last_state = "Čekám: " + ", ".join(waiting); job_step(job, "Ověření cíle", "running", last_state); await asyncio.sleep(3)
         else: raise RuntimeError("Target health timeout after 120 s: " + last_state)
+        if detail["domains"]:
+            job_step(job, "Proxy cutover", "running", "Připravuji Traefik route na cílovém site přes LAN/DATA síť")
+            proxy_result = await sync_stack_proxy(detail, target_id)
+            target_proxy_configured = bool(proxy_result.get("configured"))
+            job_step(job, "Proxy cutover", "ok", "Traefik připraven · backend " + str(proxy_result.get("lan_ip")) + " · " + str(proxy_result.get("domains")) + " domén(a)")
         settings = get_endpoint_settings(); source_public_ip = settings.get(int(source_id), {}).get("public_ip", ""); target_public_ip = settings.get(int(target_id), {}).get("public_ip", "")
         if detail["domains"] and vas_hosting_enabled() and source_public_ip and target_public_ip and source_public_ip != target_public_ip:
             job_step(job, "DNS cutover", "running", "Přepínám A záznamy " + source_public_ip + " → " + target_public_ip)
@@ -88,6 +94,11 @@ async def migration_worker(job):
             job_step(job, "Rollback zdroje", "running", "Migrace selhala, vracím zdroj do provozu")
             try:
                 await start_stack(stack_id, source_id); await asyncio.sleep(5)
+                if target_proxy_configured:
+                    target_site = get_endpoint_settings().get(int(target_id), {}).get("site", "")
+                    await remove_stack_proxy(detail["stack"]["name"], target_site)
+                if detail.get("domains"):
+                    await sync_stack_proxy(detail, source_id)
                 for change in reversed(dns_changes):
                     await vas_update_a_record(change["zone"], change["record_id"], change["host"], change["old_content"], change["ttl"])
                 job_step(job, "Rollback zdroje", "ok", "Zdrojový stack byl znovu spuštěn" + (" a DNS vráceno" if dns_changes else ""))
