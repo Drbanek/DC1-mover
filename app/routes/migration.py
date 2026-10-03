@@ -40,10 +40,14 @@ async def migration_worker(job):
         source_mgmt = (get_endpoint_settings().get(int(source_id), {}).get("host_ip") or "").strip()
         target_mgmt = (get_endpoint_settings().get(int(target_id), {}).get("host_ip") or "").strip()
         if source_mgmt and target_mgmt and source_mgmt != target_mgmt:
-            import re
-            pattern = re.compile(r'(?P<prefix>["\\\'\s-])' + re.escape(source_mgmt) + r'(?P<suffix>:\\d+(?::\\d+)?(?:/(?:tcp|udp|sctp))?)')
-            stack_file, mgmt_rewrites = pattern.subn(lambda m: m.group("prefix") + target_mgmt + m.group("suffix"), stack_file)
+            # Compose short port syntax can be quoted or unquoted and PyYAML may
+            # normalize it. Replace the literal bind address independently of
+            # surrounding YAML punctuation, but only when followed by :<port>:.
+            pattern = re.compile(r'(?<![0-9.])' + re.escape(source_mgmt) + r'(?=:\\d+:)')
+            stack_file, mgmt_rewrites = pattern.subn(target_mgmt, stack_file)
             rewritten_ports += mgmt_rewrites
+            if get_stack_proxy_setting(detail["stack"]["name"]) and mgmt_rewrites == 0:
+                raise RuntimeError("Managed proxy bind " + source_mgmt + " nebyl v Compose definici nalezen; migrace byla zastavena před vypnutím zdroje.")
         env = source_stack.get("Env") or []
         collision_message = "Cíl je volný"
         if rewritten_ports: collision_message += " · host bind IP: " + source_host_ip + " → " + target_host_ip + " (" + str(rewritten_ports) + "×)"
