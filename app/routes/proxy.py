@@ -109,8 +109,7 @@ async def _remove_dynamic_file(proxy_id, filename):
         raise RuntimeError("Unsafe Traefik filename")
     await _run_proxy_helper(
         proxy_id,
-        'rm -f "/dynamic/$DSM_FILE"',
-        env=["DSM_FILE=" + filename],
+        "rm -f -- /dynamic/" + filename,
         binds=["/opt/traefik/dynamic:/dynamic"],
     )
 
@@ -207,15 +206,10 @@ async def verify_stack_proxy_tls(detail, endpoint_id, timeout=120):
     node = settings.get(int(endpoint_id), {})
     site = (node.get("site") or "").strip().upper()
     proxy_id = _site_proxy(site)
-    proxy = settings.get(int(proxy_id), {})
-    proxy_lan_ip = (proxy.get("lan_ip") or "").strip()
-    if not proxy_lan_ip:
-        raise RuntimeError("PROXY endpoint nemá LAN IP pro lokální TLS ověření")
     hosts = [str(d.get("host") or "").strip().lower().rstrip(".") for d in (detail.get("domains") or []) if d.get("host")]
     if not hosts:
         return {"ok": True, "domains": 0}
-    # Run openssl on the PROXY host network so verification never depends on
-    # hairpin NAT or the local resolver. verify_hostname validates SAN/CN.
+    # The helper shares the PROXY host network, so 127.0.0.1:443 reaches the\n    # local Traefik directly. No PROXY LAN IP, hairpin NAT or DNS is required.\n    # SNI + verify_hostname validates the certificate for the migrated host.
     deadline = asyncio.get_running_loop().time() + timeout
     pending = list(hosts)
     while asyncio.get_running_loop().time() < deadline:
@@ -223,7 +217,7 @@ async def verify_stack_proxy_tls(detail, endpoint_id, timeout=120):
         for host in hosts:
             cmd = (
                 'apk add --no-cache openssl >/dev/null 2>&1; '
-                'printf "" | openssl s_client -connect ' + proxy_lan_ip + ':443 -servername ' + host +
+                'printf "" | openssl s_client -connect 127.0.0.1:443 -servername ' + host +
                 ' -verify_hostname ' + host + ' -verify_return_error 2>/dev/null | grep -q "Verify return code: 0 (ok)"'
             )
             try:
