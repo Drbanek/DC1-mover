@@ -88,6 +88,15 @@ async function configureFirewall(endpointId){
 }
 
 async function showFirewall(endpointId,name){
- try{const d=await getJson("/api/endpoints/"+endpointId+"/firewall");const raw=JSON.stringify(d.full_ruleset||d.ruleset||d,null,2);const w=window.open("","_blank");w.document.write("<title>Firewall - "+esc(name||endpointId)+"</title><style>body{font-family:ui-monospace,monospace;background:#0f172a;color:#e2e8f0;padding:24px}pre{white-space:pre-wrap}</style><h2>Firewall · "+esc(name||("Endpoint "+endpointId))+"</h2><pre>"+esc(raw)+"</pre>")}
- catch(e){alert("Firewall nelze načíst: "+e.message)}
+ try{
+  const d=await getJson("/api/endpoints/"+endpointId+"/firewall"),rs=(d.full_ruleset||{}).nftables||[];
+  const ports=[],nets=[],policies=[];
+  rs.forEach(x=>{if(x.chain&&x.chain.hook)policies.push({family:x.chain.family,chain:x.chain.name,policy:x.chain.policy||"—"});
+   if(x.rule){const r=x.rule,e=r.expr||[];let port=null,target=null,addr=null;e.forEach(z=>{if(z.match&&z.match.left&&z.match.left.payload&&z.match.left.payload.field==="dport")port=z.match.right;if(z.match&&z.match.left&&z.match.left.payload&&z.match.left.payload.field==="daddr")addr=z.match.right;if(z.accept!==undefined)target="ACCEPT";if(z.drop!==undefined)target="DROP"});if(port)ports.push({family:r.family,table:r.table,chain:r.chain,port:port,address:addr||"",action:target||"NAT"});}
+  });
+  const raw=JSON.stringify(d.full_ruleset||d.ruleset||d,null,2),w=window.open("","_blank");
+  const rows=ports.map(p=>"<tr><td>"+esc(p.family)+"</td><td>TCP "+esc(p.port)+"</td><td>"+esc(p.address||"—")+"</td><td>"+esc(p.chain)+"</td><td>"+esc(p.action)+"</td></tr>").join("");
+  const pol=policies.map(p=>"<tr><td>"+esc(p.family)+"</td><td>"+esc(p.chain)+"</td><td>"+esc(p.policy)+"</td></tr>").join("");
+  w.document.write("<title>Firewall - "+esc(name||endpointId)+"</title><style>body{font:14px system-ui;background:#0f172a;color:#e2e8f0;padding:28px;max-width:1200px;margin:auto}h2,h3{margin-top:24px}.card{background:#172033;border:1px solid #334155;border-radius:12px;padding:18px;margin:14px 0}.ok{color:#86efac}.warn{color:#fbbf24}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #334155}button{padding:9px 14px;border:0;border-radius:8px;cursor:pointer}pre{white-space:pre-wrap;overflow:auto}details{margin-top:18px}</style><h2>Firewall · "+esc(name||("Endpoint "+endpointId))+"</h2><div class='card'><b>DockerStackMover firewall:</b> <span class='"+(d.managed?"ok":"warn")+"'>"+(d.managed?"SPRAVOVÁN":"NENÍ SPRAVOVÁN")+"</span></div><div class='card'><h3>Porty nalezené v pravidlech</h3><table><tr><th>Family</th><th>Port</th><th>Adresa</th><th>Chain</th><th>Akce</th></tr>"+(rows||"<tr><td colspan=5>Žádné</td></tr>")+"</table></div><div class='card'><h3>Policy</h3><table><tr><th>Family</th><th>Chain</th><th>Policy</th></tr>"+pol+"</table></div><details><summary>RAW JSON</summary><pre>"+esc(raw)+"</pre></details>");
+ }catch(e){alert("Firewall nelze načíst: "+e.message)}
 }
