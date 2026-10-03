@@ -122,12 +122,17 @@ async def sync_stack_proxy(detail, endpoint_id):
     node = settings.get(int(endpoint_id), {})
     site = (node.get("site") or "").strip().upper()
     lan_ip = (node.get("lan_ip") or "").strip()
+    host_ip = (node.get("host_ip") or "").strip()
     if not site:
         raise RuntimeError("Endpoint nemá nastavenou Site / lokalitu")
-    if not lan_ip:
-        raise RuntimeError("Endpoint nemá nastavenou LAN IP. Management IP 10.200.x.x se pro aplikační proxy záměrně nepoužívá.")
-    proxy_id = _site_proxy(site)
     stack_name = detail["stack"]["name"]
+    managed = any(bool(d.get("managed")) for d in (domains or []))
+    backend_ip = host_ip if managed else lan_ip
+    if not backend_ip:
+        if managed:
+            raise RuntimeError("Endpoint nemá management Host IP pro DSM managed proxy backend.")
+        raise RuntimeError("Endpoint nemá nastavenou LAN IP.")
+    proxy_id = _site_proxy(site)
     base = _safe_name(stack_name)
     routers = []
     services = []
@@ -143,14 +148,14 @@ async def sync_stack_proxy(detail, endpoint_id):
             raise RuntimeError("Neplatný dc1.proxy.host: " + host)
         if scheme not in ("http", "https") or not (1 <= port <= 65535):
             raise RuntimeError("Neplatný proxy backend pro " + host)
-        key = (lan_ip, port)
+        key = (backend_ip, port)
         if key not in tested:
-            await _run_proxy_helper(proxy_id, "nc -z -w 5 " + lan_ip + " " + str(port), host_network=True)
+            await _run_proxy_helper(proxy_id, "nc -z -w 5 " + backend_ip + " " + str(port), host_network=True)
             tested.add(key)
         svc = base + "-" + str(index)
         web = svc + "-web"
         secure = svc + "-secure"
-        url = scheme + "://" + lan_ip + ":" + str(port)
+        url = scheme + "://" + backend_ip + ":" + str(port)
         routers.extend([
             "    " + web + ":",
             "      rule: " + json.dumps("Host(`" + host + "`)"),
@@ -172,7 +177,7 @@ async def sync_stack_proxy(detail, endpoint_id):
     config = "\n".join(["http:", "  routers:"] + routers + ["  services:"] + services) + "\n"
     filename = "dsm-" + base + ".yml"
     await _write_dynamic_file(proxy_id, filename, config)
-    return {"configured": True, "site": site, "proxy_endpoint_id": proxy_id, "lan_ip": lan_ip, "file": filename, "domains": len(domains)}
+    return {"configured": True, "site": site, "proxy_endpoint_id": proxy_id, "lan_ip": backend_ip, "backend_ip": backend_ip, "file": filename, "domains": len(domains)}
 
 
 async def activate_stack_proxy_tls(detail, endpoint_id):
