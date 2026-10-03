@@ -305,7 +305,28 @@ async def prepare_node_stream(endpoint_id: int, session=Depends(require_csrf)):
             if start.status_code not in (204,304):
                 await remove_container(endpoint_id,container_id)
                 yield ev("container","error","Capacity Agent start failed: "+start.text); return
-            yield ev("container","done","Capacity Agent spuštěn")
+
+            # Do not claim success only because Docker accepted /start. Verify that
+            # the container is actually still running; otherwise surface its state
+            # and logs instead of waiting on port 9100 and deleting the evidence.
+            await asyncio.sleep(1)
+            inspect = await docker_request(endpoint_id, "GET", "/containers/" + container_id + "/json")
+            if inspect.status_code != 200:
+                yield ev("container","error","Capacity Agent po spuštění nelze ověřit: HTTP "+str(inspect.status_code)+" "+inspect.text[:300]); return
+            state = inspect.json().get("State") or {}
+            if not state.get("Running"):
+                logs = await docker_request(endpoint_id, "GET", "/containers/" + container_id + "/logs",
+                                            params={"stdout":"1","stderr":"1","tail":"40"})
+                detail = (logs.text if logs.status_code == 200 else "").strip()
+                error = (state.get("Error") or "").strip()
+                exit_code = state.get("ExitCode")
+                message = "Capacity Agent se ihned ukončil (exit "+str(exit_code)+")"
+                if error:
+                    message += ": "+error
+                if detail:
+                    message += " · log: "+detail[-1200:]
+                yield ev("container","error",message); return
+            yield ev("container","done","Capacity Agent běží")
 
             agent_url=(settings.get("agent_url") or "").strip().rstrip("/") or ("http://"+host_ip+":9100")
             yield ev("health","running","Čekám na "+agent_url+"/health…")
