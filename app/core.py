@@ -271,9 +271,16 @@ async def docker_request(endpoint_id, method, path, **kwargs):
     # so send a raw request without content headers when no body was requested.
     async with client() as c:
         url = "/api/endpoints/" + str(endpoint_id) + "/docker" + path
-        if method.upper() == "POST" and "json" not in kwargs and "content" not in kwargs and "data" not in kwargs and "files" not in kwargs:
-            # Portainer's Docker proxy requires an explicit zero-length payload.
-            return await c.request(method, url, content=b"", headers={"Content-Length": "0"}, **kwargs)
+        if method.upper() == "POST" and path.endswith("/start") and "json" not in kwargs and "content" not in kwargs and "data" not in kwargs and "files" not in kwargs:
+            # Docker API >= 1.24 rejects any request body on container start.
+            # httpx may add Content-Length: 0 for POST, which Portainer forwards in a
+            # way newer Docker daemons interpret as a body. Build the request manually
+            # and strip entity headers completely.
+            request = c.build_request(method, url, **kwargs)
+            request.headers.pop("Content-Length", None)
+            request.headers.pop("Content-Type", None)
+            request.headers.pop("Transfer-Encoding", None)
+            return await c.send(request)
         return await c.request(method, url, **kwargs)
 
 async def wait_container(endpoint_id, container_id, timeout=300):
