@@ -128,7 +128,7 @@ async def node_readiness(endpoint):
     """Return an actionable readiness report for any Portainer endpoint."""
     endpoint_id = int(endpoint["Id"])
     settings = get_endpoint_settings().get(endpoint_id, {})
-    role = (settings.get("role") or "NODE").upper()
+    role = (settings.get("role") or "NONE").upper()
     host_ip, host_ip_source = endpoint_host_ip(endpoint)
     checks = {
         "docker": {"ok": False, "message": "Docker API unavailable"},
@@ -163,7 +163,10 @@ async def node_readiness(endpoint):
 async def nodes_readiness(session=Depends(require_permission("dashboard_read"))):
     endpoints = await get_endpoints()
     result = []
+    settings_map = get_endpoint_settings()
     for endpoint in endpoints:
+        if (settings_map.get(int(endpoint.get("Id")), {}).get("role") or "NONE").upper() == "NONE":
+            continue
         try:
             result.append(await node_readiness(endpoint))
         except Exception as exc:
