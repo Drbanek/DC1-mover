@@ -1,6 +1,16 @@
 from ..core import *
 from .general import *
-from .proxy import sync_stack_proxy, remove_stack_proxy
+from .proxy import sync_stack_proxy, remove_stack_proxy, activate_stack_proxy_tls, verify_stack_proxy_tls
+
+def _resolve_public_a(host, resolver):
+    import socket
+    import dns.resolver
+    query = dns.resolver.Resolver(configure=False)
+    query.nameservers = [resolver]
+    query.timeout = 2
+    query.lifetime = 4
+    return sorted({str(answer) for answer in query.resolve(host, "A")})
+
 
 async def migration_worker(job):
     stack_id = job["stack_id"]; target_id = job["target_id"]; source_stopped = False; created_volumes = []; dns_changes = []; target_proxy_configured = False
@@ -82,6 +92,33 @@ async def migration_worker(job):
                 change = {"provider": "vas-hosting", "zone": zone, "record_id": record["id"], "host": host, "type": "A", "old_content": record.get("content"), "new_content": target_public_ip, "ttl": int(record.get("ttl") or 60)}
                 await vas_update_a_record(zone, record["id"], host, target_public_ip, min(change["ttl"], 60)); dns_changes.append(change)
             job_step(job, "DNS cutover", "ok", str(len(dns_changes)) + " A záznam(y) přepnuty na " + target_public_ip + " · TTL do potvrzení max. 60 s")
+            job_step(job, "DNS propagace", "running", "Čekám, až veřejné DNS resolvery vrátí " + target_public_ip)
+            dns_deadline = asyncio.get_running_loop().time() + 300
+            pending_dns = []
+            while asyncio.get_running_loop().time() < dns_deadline:
+                pending_dns = []
+                for domain in detail["domains"]:
+                    host = domain.get("host")
+                    if not host: continue
+                    for resolver in ("1.1.1.1", "8.8.8.8"):
+                        try:
+                            answers = await asyncio.to_thread(_resolve_public_a, host, resolver)
+                        except Exception as exc:
+                            pending_dns.append(host + "@" + resolver + "=" + str(exc))
+                            continue
+                        if target_public_ip not in answers:
+                            pending_dns.append(host + "@" + resolver + "=" + (",".join(answers) or "bez A záznamu"))
+                if not pending_dns:
+                    break
+                job_step(job, "DNS propagace", "running", "Čekám: " + " · ".join(pending_dns[:4]))
+                await asyncio.sleep(5)
+            if pending_dns:
+                raise RuntimeError("DNS propagation timeout after 300 s: " + " · ".join(pending_dns[:6]))
+            job_step(job, "DNS propagace", "ok", "Cloudflare i Google vrací " + target_public_ip)
+            job_step(job, "SSL certifikát", "running", "DNS je na cíli · aktivuji TLS router a čekám na Let's Encrypt")
+            await activate_stack_proxy_tls(detail, target_id)
+            ssl_result = await verify_stack_proxy_tls(detail, target_id, timeout=120)
+            job_step(job, "SSL certifikát", "ok", str(ssl_result.get("domains")) + " domén(a) má platný certifikát pro cílový PROXY")
         elif detail["domains"]:
             reason = "stejná veřejná IP" if source_public_ip and source_public_ip == target_public_ip else "DNS provider/Public IP není nakonfigurován"
             job_step(job, "DNS cutover", "ok", "Beze změny · " + reason)
