@@ -193,7 +193,7 @@ async function provisionServer(){
 
 async function bootstrapFirstPortainer(){
  const b=document.getElementById("bootButton"),state=document.getElementById("bootState");
- const p={site:document.getElementById("bootSite").value,host:document.getElementById("bootHost").value,lan_ip:document.getElementById("bootLanIp").value,ssh_user:document.getElementById("bootUser").value,ssh_password:document.getElementById("bootPassword").value,wg_endpoint:document.getElementById("bootWgEndpoint").value};
+ const p={site:document.getElementById("bootSite").value,public_ip:document.getElementById("bootPublicIp").value,host:document.getElementById("bootHost").value,lan_ip:document.getElementById("bootLanIp").value,ssh_user:document.getElementById("bootUser").value,ssh_password:document.getElementById("bootPassword").value,wg_endpoint:document.getElementById("bootWgEndpoint").value};
  if(!p.site||!p.host||!p.lan_ip||!p.ssh_user||!p.ssh_password){state.className="error";state.textContent="Vyplň lokalitu, SSH/LAN adresu a SSH přihlášení.";return}
  if(!p.wg_endpoint)p.wg_endpoint=p.lan_ip+":51820";
  if(!confirm("Připravit "+p.site+"-PORTAINER na "+p.host+"?\n\nNainstaluje se Docker, Portainer Server a centrální WireGuard HUB."))return;
@@ -203,7 +203,7 @@ async function bootstrapFirstPortainer(){
   const raw=await r.text();if(!r.ok)throw new Error(raw);const d=JSON.parse(raw);
   state.className="ready";state.innerHTML="✓ PORTAINER + WG HUB připraven<br>Portainer: "+esc(d.portainer_url)+"<br>WG: "+esc(d.hub_management_ip)+" · "+esc(d.wg_endpoint)+"<br><strong>Jednorázově si ulož Portainer admin heslo:</strong> <code>"+esc(d.portainer_admin_password)+"</code>";
   document.getElementById("bootPassword").value="";
-  document.getElementById("provSite").value=p.site;
+  document.getElementById("provSite").value=p.site;\n  document.getElementById("provPublicIp").value=p.public_ip||"";
   document.getElementById("provHubHost").value=p.lan_ip;
   document.getElementById("provHubUser").value=p.ssh_user;
   document.getElementById("provHubEndpoint").value=p.wg_endpoint;
