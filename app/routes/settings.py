@@ -2,7 +2,7 @@ from ..core import *
 
 @app.get("/api/setup/status")
 async def setup_status():
-    return {"required": setup_required(), "version": "1.13.20", "language": setting_get("language","cs")}
+    return {"required": setup_required(), "version": "1.14.0", "language": setting_get("language","cs")}
 
 @app.post("/api/setup")
 async def first_setup(request: Request):
@@ -13,14 +13,15 @@ async def first_setup(request: Request):
     password = str(p.get("password") or "")
     portainer_url = str(p.get("portainer_url") or "").strip().rstrip("/")
     portainer_token = str(p.get("portainer_token") or "").strip()
-    if not portainer_url or not portainer_token:
-        raise HTTPException(400, "Portainer URL and API token are required")
+    if bool(portainer_url) != bool(portainer_token):
+        raise HTTPException(400, "Portainer URL a API token musí být vyplněny společně, nebo oba prázdné.")
     try:
         create_admin(username, password)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    setting_set("portainer_url", portainer_url)
-    setting_set("portainer_token", portainer_token, True)
+    if portainer_url and portainer_token:
+        setting_set("portainer_url", portainer_url)
+        setting_set("portainer_token", portainer_token, True)
     setting_set("vas_hosting_api_key", str(p.get("vas_hosting_api_key") or "").strip(), True)
     setting_set("vas_hosting_api_url", str(p.get("vas_hosting_api_url") or "https://portal.vas-hosting.cz/api/v1").strip())
     setting_set("language", "en" if str(p.get("language") or "cs").lower()=="en" else "cs")

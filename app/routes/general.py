@@ -2,7 +2,7 @@ from ..core import *
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "1.13.23"}
+    return {"status": "ok", "version": "1.14.0"}
 
 @app.get("/api/inventory")
 async def inventory(session=Depends(require_permission("migrations"))):
@@ -27,6 +27,110 @@ async def endpoint_settings_save(endpoint_id: int, request: Request, session=Dep
     if not any(int(e["Id"]) == endpoint_id for e in endpoints): raise HTTPException(404, "Endpoint not found")
     payload = await request.json(); save_endpoint_setting(endpoint_id, bool(payload.get("migration_enabled")), str(payload.get("host_ip") or ""), str(payload.get("site") or ""), str(payload.get("public_ip") or ""), str(payload.get("agent_url") or ""), str(payload["agent_token"]) if payload.get("agent_token") else None, str(payload.get("role") or "NONE").upper(), str(payload.get("lan_ip") or ""))
     return {"ok": True}
+
+
+@app.get("/api/endpoints/{endpoint_id}/remove-check")
+async def endpoint_remove_check(endpoint_id: int, session=Depends(require_permission("admin"))):
+    endpoints = await get_endpoints()
+    endpoint = next((e for e in endpoints if int(e["Id"]) == endpoint_id), None)
+    if not endpoint: raise HTTPException(404, "Endpoint not found")
+    setting = get_endpoint_settings().get(endpoint_id, {})
+    role = (setting.get("role") or "NONE").upper()
+    if role not in ("NODE", "PROXY"):
+        return {"allowed": False, "role": role, "reason": "Odebrat lze pouze NODE nebo PROXY."}
+    stacks = [s for s in await get_stacks() if int(s.get("EndpointId") or 0) == endpoint_id]
+    containers = (await docker_get(endpoint_id, "/containers/json", params={"all": "1"})).json()
+    system_names = {"portainer_agent", "traefik"}
+    workload_containers = []
+    for item in containers:
+        names = [str(x).lstrip("/") for x in (item.get("Names") or [])]
+        name = names[0] if names else str(item.get("Id") or "")[:12]
+        if name in system_names or name.startswith("dsm-proxy-"):
+            continue
+        workload_containers.append(name)
+    if role == "NODE":
+        blockers = []
+        if stacks: blockers.append(str(len(stacks)) + " stacků")
+        if workload_containers: blockers.append(str(len(workload_containers)) + " aplikačních kontejnerů")
+        return {"allowed": not blockers, "role": role, "stacks": len(stacks), "workload_containers": workload_containers,
+                "reason": "NODE je prázdný a lze jej bezpečně odebrat." if not blockers else "NODE nelze odebrat: " + ", ".join(blockers) + "."}
+    # PROXY: only system containers may remain and there must be no application
+    # dynamic Traefik files. The helper mounts the host directory read-only.
+    proxy_files = []
+    try:
+        # We cannot return stdout from the helper, so use the Traefik container's
+        # mounted dynamic directory through Docker exec for a read-only listing.
+        traefik = next((x for x in containers if "traefik" in [n.lstrip("/") for n in (x.get("Names") or [])]), None)
+        if not traefik:
+            return {"allowed": False, "role": role, "reason": "PROXY nemá spuštěný Traefik."}
+        ex = await docker_request(endpoint_id, "POST", "/containers/" + traefik["Id"] + "/exec",
+                                  json={"AttachStdout": True, "AttachStderr": True, "Cmd": ["sh", "-c", "find /etc/traefik/dynamic -maxdepth 1 -type f -name '*.yml' -o -name '*.yaml' 2>/dev/null | sed 's#.*/##'"]})
+        if ex.status_code != 201: raise RuntimeError("Docker exec create HTTP " + str(ex.status_code))
+        start = await docker_request(endpoint_id, "POST", "/exec/" + ex.json()["Id"] + "/start", json={"Detach": False, "Tty": False})
+        if start.status_code != 200: raise RuntimeError("Docker exec start HTTP " + str(start.status_code))
+        raw = start.content.replace(b"\x01\x00\x00\x00", b"").replace(b"\x02\x00\x00\x00", b"").decode("utf-8", "ignore")
+        proxy_files = [x.strip() for x in raw.splitlines() if x.strip().endswith((".yml", ".yaml"))]
+    except Exception as exc:
+        return {"allowed": False, "role": role, "reason": "Nelze bezpečně ověřit Traefik konfiguraci: " + str(exc)}
+    blockers = []
+    if stacks: blockers.append(str(len(stacks)) + " stacků")
+    if workload_containers: blockers.append(str(len(workload_containers)) + " aplikačních kontejnerů")
+    if proxy_files: blockers.append(str(len(proxy_files)) + " aktivních proxy konfigurací")
+    return {"allowed": not blockers, "role": role, "stacks": len(stacks), "workload_containers": workload_containers, "proxy_files": proxy_files,
+            "reason": "PROXY nemá aplikační routy a lze jej bezpečně odebrat." if not blockers else "PROXY nelze odebrat: " + ", ".join(blockers) + "."}
+
+@app.post("/api/endpoints/{endpoint_id}/remove")
+async def endpoint_remove(endpoint_id: int, request: Request, session=Depends(require_csrf)):
+    if "admin" not in user_permissions(session.get("user","")): raise HTTPException(403, "Permission denied")
+    check = await endpoint_remove_check(endpoint_id, session)
+    if not check.get("allowed"): raise HTTPException(409, check.get("reason") or "Endpoint nelze bezpečně odebrat.")
+    payload = await request.json()
+    hub_host = str(payload.get("hub_host") or "").strip()
+    hub_user = str(payload.get("hub_ssh_user") or "").strip()
+    hub_password = str(payload.get("hub_ssh_password") or "")
+    hub_port = int(payload.get("hub_ssh_port") or 22)
+    setting = get_endpoint_settings().get(endpoint_id, {})
+    mgmt_ip = str(setting.get("host_ip") or "").strip()
+    if not all((hub_host, hub_user, hub_password, mgmt_ip)):
+        raise HTTPException(400, "Pro bezpečné odebrání je potřeba SSH přístup na MAIN WireGuard HUB.")
+    try:
+        from .provisioning import _ssh, _run
+        hub = _ssh(hub_host, hub_port, hub_user, hub_password)
+        try:
+            conf = "/etc/wireguard/wg-dsm.conf"
+            # Find the peer by its unique AllowedIPs management address, remove
+            # it from the live interface and rewrite only that [Peer] block.
+            script = r"""set -e
+IP=__IP__
+CONF=/etc/wireguard/wg-dsm.conf
+PUB=$(wg show wg-dsm allowed-ips | awk -v ip="$IP/32" '$2==ip{print $1; exit}')
+[ -n "$PUB" ] || exit 44
+wg set wg-dsm peer "$PUB" remove
+python3 - "$CONF" "$IP/32" <<'PY'
+import sys
+path, target = sys.argv[1], sys.argv[2]
+text=open(path).read()
+blocks=text.split("\n[Peer]\n")
+out=[blocks[0]]
+for block in blocks[1:]:
+    if ("AllowedIPs = "+target) in block:
+        continue
+    out.append("[Peer]\n"+block)
+open(path,"w").write("\n".join(out))
+PY
+"""
+            _run(hub, script.replace("__IP__", shlex.quote(mgmt_ip)), hub_password)
+        finally:
+            hub.close()
+    except Exception as exc:
+        raise HTTPException(502, "WireGuard peer se nepodařilo bezpečně odebrat: " + str(exc))
+    async with client() as pc:
+        r = await pc.delete("/api/endpoints/" + str(endpoint_id))
+    if r.status_code not in (200, 204):
+        raise HTTPException(502, "WireGuard peer byl odebrán, ale Portainer endpoint ne: " + r.text)
+    with db() as conn:
+        conn.execute("DELETE FROM endpoint_settings WHERE endpoint_id = ?", (endpoint_id,))
+    return {"ok": True, "role": check.get("role"), "endpoint_id": endpoint_id}
 
 @app.get("/api/stacks/{stack_id}/targets")
 async def migration_targets(stack_id: int, session=Depends(require_permission("migrations"))):

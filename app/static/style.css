@@ -164,3 +164,42 @@ td:last-child button { display: inline-block; margin: 2px 4px 2px 0 !important; 
 .readinessCheck{display:flex;align-items:center;gap:9px;padding:9px;background:#111827;border-radius:8px}
 .readinessCheck .checkIcon{width:22px;height:22px;flex:0 0 22px}
 .readinessCheck small{display:block;color:#94a3b8;margin-top:2px;overflow-wrap:anywhere}
+
+
+/* v1.14 UI cleanup: calmer dashboard, denser cards and responsive layout. */
+#tab-dashboard.active{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  gap:16px;
+  align-items:start;
+}
+#tab-dashboard > .card{margin-bottom:0;min-width:0}
+#tab-dashboard > .card:first-child{grid-column:1/-1}
+#tab-dashboard .header{padding:15px 18px}
+#tab-dashboard .body{padding:16px 18px}
+#tab-dashboard .item{margin:6px 0;padding:11px}
+#tab-dashboard .readinessChecks{grid-template-columns:repeat(auto-fit,minmax(145px,1fr))}
+.wrap{padding-top:28px}
+.subtitle{margin-bottom:22px}
+.tabs{position:sticky;top:0;z-index:20;background:#0b1120;padding-top:8px}
+button,input,select{transition:border-color .15s ease,background .15s ease,opacity .15s ease}
+input:focus,select:focus{outline:2px solid #2563eb55;outline-offset:1px;border-color:#3b82f6}
+.login .body{padding:24px}
+.login button{width:100%;margin-top:8px;padding:11px 14px}
+@media(max-width:900px){
+  #tab-dashboard.active{grid-template-columns:1fr}
+  #tab-dashboard > .card:first-child{grid-column:auto}
+}
+@media(max-width:700px){
+  .wrap{padding:16px 10px}
+  h1{font-size:24px}
+  .subtitle{font-size:13px;margin-bottom:16px}
+  .tabs{gap:6px;margin-bottom:14px}
+  .tab{white-space:nowrap;padding:8px 11px}
+  .card{border-radius:10px;margin-bottom:14px}
+  .header,.body,#tab-dashboard .header,#tab-dashboard .body{padding:13px}
+  .actions{flex-wrap:wrap}
+  .actions button{flex:1 1 auto}
+  .card>.body{max-width:100%;overflow-x:auto}
+  .readinessHead{flex-direction:column}
+}
