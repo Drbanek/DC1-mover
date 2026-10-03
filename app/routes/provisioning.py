@@ -180,7 +180,7 @@ async def provision_server(request: Request, session=Depends(require_csrf)):
     # Register Portainer Agent only after WG and firewall have been verified.
     try:
         async with client() as c:
-            r=await c.post("/api/endpoints",data={"Name":result["name"],"EndpointCreationType":"2","URL":"tcp://"+result["management_ip"]+":9001","TLS":"true","TLSSkipVerify":"true"})
+            r=await c.post("/api/endpoints",data={"Name":result["name"],"EndpointCreationType":"2","URL":"tcp://"+result["management_ip"]+":9001","TLS":"true","TLSSkipVerify":"true","TLSSkipClientVerify":"true"})
         if r.status_code not in (200,201,409):
             raise HTTPException(r.status_code,"Portainer registration failed: "+r.text)
         if r.status_code in (200,201):
