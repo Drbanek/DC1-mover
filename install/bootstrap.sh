@@ -51,7 +51,7 @@ say "Aktualizace systému"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get -y upgrade
-apt-get install -y ca-certificates curl gnupg jq xfsprogs nftables arping
+apt-get install -y ca-certificates curl gnupg jq xfsprogs nftables arping parted
 ok "Systém aktualizován"
 
 say "Docker"
@@ -120,22 +120,29 @@ EOF
 netplan generate
 ok "Netplan validní; konfigurace je připravena."
 
-say "Host firewall – bezpečný základ"
+say "Host firewall – management ochrana"
+ask MGMT_SOURCE "Důvěryhodná IPv4 adresa centrálního managementu/DC1" "78.24.11.49"
+python3 -c 'import ipaddress,sys; a=ipaddress.ip_address(sys.argv[1]); assert a.version==4' "$MGMT_SOURCE" || die "Neplatná IPv4."
 systemctl enable --now nftables
-cat >/etc/nftables.conf <<EOF
-#!/usr/sbin/nft -f
-flush ruleset
-table inet bootstrap {
+# Nikdy neflushujeme celý ruleset: Docker vlastní své NAT/FORWARD chainy.
+nft delete table inet dockerstackmover-bootstrap >/dev/null 2>&1 || true
+FW_TMP=$(mktemp)
+cat >"$FW_TMP" <<EOF
+table inet dockerstackmover-bootstrap {
  chain input {
-  type filter hook input priority 0; policy accept;
+  type filter hook input priority -10; policy accept;
   ct state established,related accept
   iifname "lo" accept
+  ip saddr $MGMT_SOURCE tcp dport 9001 accept
+  tcp dport 9001 drop
  }
 }
 EOF
-nft -c -f /etc/nftables.conf
-nft -f /etc/nftables.conf
-ok "nftables aktivní; restriktivní management policy dokončí DockerStackMover po registraci."
+nft -c -f "$FW_TMP"
+nft -f "$FW_TMP"
+rm -f "$FW_TMP"
+ok "TCP 9001 povolen pouze z $MGMT_SOURCE; Docker pravidla zůstala nedotčena."
+echo "Po registraci DockerStackMover převezme management firewall (9001/9100) vlastním potvrzovacím/rollback mechanismem."
 
 echo
 echo "============================================================"
