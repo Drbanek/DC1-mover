@@ -197,7 +197,8 @@ docker inspect portainer_agent >/dev/null 2>&1
 docker port portainer_agent 9001/tcp | grep -q 9001"""
         _run(target,docker,password,900)
         steps.append("Docker + Portainer Agent OK")
-        fw=f"""systemctl enable --now nftables
+        fw=f"""systemctl enable nftables
+mkdir -p /etc/nftables.d
 nft delete table inet dockerstackmover-bootstrap >/dev/null 2>&1 || true
 nft add table inet dockerstackmover-bootstrap
 nft 'add chain inet dockerstackmover-bootstrap input {{ type filter hook input priority -10; policy accept; }}'
@@ -205,7 +206,10 @@ nft add rule inet dockerstackmover-bootstrap input ct state established,related 
 nft add rule inet dockerstackmover-bootstrap input iifname lo accept
 nft add rule inet dockerstackmover-bootstrap input iifname wg-dsm ip saddr {hub_mgmt_ip} tcp dport 9001 accept
 nft add rule inet dockerstackmover-bootstrap input iifname wg-dsm ip saddr {manager_mgmt_ip} tcp dport 9100 accept
-nft add rule inet dockerstackmover-bootstrap input tcp dport '{{ 9001, 9100 }}' drop"""
+nft add rule inet dockerstackmover-bootstrap input tcp dport '{{ 9001, 9100 }}' drop
+nft list table inet dockerstackmover-bootstrap >/etc/nftables.d/dockerstackmover-bootstrap.nft
+grep -qF 'include \"/etc/nftables.d/*.nft\"' /etc/nftables.conf || echo 'include \"/etc/nftables.d/*.nft\"' >>/etc/nftables.conf
+docker port portainer_agent 9001/tcp | grep -q 9001"""
         _run(target,fw,password)
         steps.append("Management firewall OK")
         # Test the exact central management path before returning success.
