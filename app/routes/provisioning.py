@@ -151,7 +151,8 @@ nft add rule inet dockerstackmover-bootstrap input tcp dport '{{ 9001, 9100 }}' 
         return {"ok":True,"name":name,"site":site,"role":role,"lan_ip":lan_ip,"management_ip":mgmt_ip,
                 "wireguard_public_key":peer_pub,"steps":steps}
     finally:
-        try:\n            if target: target.close()
+        try:
+            if target: target.close()
         except Exception: pass
         if hub:
             try: hub.close()
