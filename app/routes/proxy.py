@@ -1,3 +1,4 @@
+import base64
 import json
 import re
 import uuid
@@ -85,10 +86,10 @@ async def _run_proxy_helper(proxy_id, cmd, env=None, host_network=False, binds=N
 async def _write_dynamic_file(proxy_id, filename, content):
     if not re.fullmatch(r"[a-z0-9._-]+\.ya?ml", filename):
         raise RuntimeError("Unsafe Traefik filename")
+    encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
     await _run_proxy_helper(
         proxy_id,
-        'umask 022; printf "%s" "$DSM_CONFIG" > /dynamic/.' + filename + '.tmp; mv -f /dynamic/.' + filename + '.tmp /dynamic/' + filename + '; test -s /dynamic/' + filename,
-        env=["DSM_CONFIG=" + content],
+        'umask 022; printf "%s" ' + json.dumps(encoded) + ' | base64 -d > /dynamic/.' + filename + '.tmp; test -s /dynamic/.' + filename + '.tmp; mv -f /dynamic/.' + filename + '.tmp /dynamic/' + filename + '; test -s /dynamic/' + filename,
         binds=["/opt/traefik/dynamic:/dynamic"],
     )
 
