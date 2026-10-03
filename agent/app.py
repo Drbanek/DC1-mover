@@ -41,9 +41,15 @@ def capacity(x_agent_token: str | None = Header(default=None)):
 @app.get("/firewall")
 def firewall(x_agent_token: str | None = Header(default=None)):
     auth(x_agent_token)
-    out=nft(["-j","list","table","inet","dockerstackmover"])
-    try: return {"managed":True,"ruleset":json.loads(out)}
-    except Exception: return {"managed":True,"raw":out}
+    p=subprocess.run(["nft","-j","list","table","inet","dockerstackmover"],capture_output=True,text=True,timeout=10)
+    if p.returncode != 0:
+        # A freshly installed agent has no managed table yet. This is a valid,
+        # unconfigured state; the UI can then offer to apply the policy.
+        if "No such file or directory" in (p.stderr or ""):
+            return {"managed":False,"configured":False,"message":"Firewall policy not configured yet"}
+        raise HTTPException(500,(p.stderr or p.stdout)[:500])
+    try: return {"managed":True,"configured":True,"ruleset":json.loads(p.stdout)}
+    except Exception: return {"managed":True,"configured":True,"raw":p.stdout}
 
 @app.put("/firewall")
 def firewall_apply(policy: FirewallPolicy, x_agent_token: str | None = Header(default=None)):
