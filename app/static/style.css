@@ -158,3 +158,9 @@ td:last-child button { display: inline-block; margin: 2px 4px 2px 0 !important; 
   line-height:normal !important;
 }
 #tab-settings .settingsGrid select { appearance:auto; -webkit-appearance:menulist; }
+
+.readinessHead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}
+.readinessChecks{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px}
+.readinessCheck{display:flex;align-items:center;gap:9px;padding:9px;background:#111827;border-radius:8px}
+.readinessCheck .checkIcon{width:22px;height:22px;flex:0 0 22px}
+.readinessCheck small{display:block;color:#94a3b8;margin-top:2px;overflow-wrap:anywhere}

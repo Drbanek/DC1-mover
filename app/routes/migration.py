@@ -28,6 +28,17 @@ async def migration_worker(job):
         if rewritten_ports: collision_message += " · host bind IP: " + source_host_ip + " → " + target_host_ip + " (" + str(rewritten_ports) + "×)"
         job_step(job, "Kontrola kolizí", "ok", collision_message); job_step(job, "Zastavení zdroje", "running", "Zastavuji stack pro konzistentní kopii dat")
         await stop_stack(stack_id, source_id); source_stopped = True; await asyncio.sleep(3); job_step(job, "Zastavení zdroje", "ok", "Zdrojový stack je zastaven")
+        backup_volumes = []
+        if setting_get("migration_backup_enabled", "true").lower() == "true" and detail["volumes"]:
+            job_step(job, "Snapshot před migrací", "running", "Vytvářím konzistentní lokální snapshot persistentních volumes")
+            backup_id = uuid.uuid4().hex[:12]
+            for volume in detail["volumes"]:
+                backup_name = "dsm-backup-" + backup_id + "-" + volume["name"]
+                await create_volume(source_id, backup_name, volume.get("driver") or "local")
+                await copy_volume(source_id, source_id, volume["name"], backup_name)
+                backup_volumes.append({"source": volume["name"], "backup": backup_name})
+            setting_set("backup:" + backup_id, json.dumps({"id":backup_id,"created_at":utcnow(),"stack":detail["stack"],"volumes":backup_volumes,"domains":detail["domains"],"stack_file":stack_file,"type":"pre-migration-volume-snapshot"}))
+            job_step(job, "Snapshot před migrací", "ok", str(len(backup_volumes)) + " volume snapshot(y) vytvořeny · " + backup_id)
         for volume in detail["volumes"]:
             step_name = "Volume: " + volume["name"]; job_step(job, step_name, "running", "Vytvářím volume na cíli")
             await create_volume(target_id, volume["name"], volume.get("driver") or "local"); created_volumes.append(volume["name"]); job_step(job, step_name, "running", "Kopíruji obsah přes Docker archive API")
@@ -63,12 +74,12 @@ async def migration_worker(job):
                 if record.get("content") != source_public_ip:
                     raise RuntimeError("DNS safety check failed for " + host + ": current A record is " + str(record.get("content")) + ", expected " + source_public_ip)
                 change = {"provider": "vas-hosting", "zone": zone, "record_id": record["id"], "host": host, "type": "A", "old_content": record.get("content"), "new_content": target_public_ip, "ttl": int(record.get("ttl") or 60)}
-                await vas_update_a_record(zone, record["id"], host, target_public_ip, change["ttl"]); dns_changes.append(change)
-            job_step(job, "DNS cutover", "ok", str(len(dns_changes)) + " A záznam(y) přepnuty na " + target_public_ip)
+                await vas_update_a_record(zone, record["id"], host, target_public_ip, min(change["ttl"], 60)); dns_changes.append(change)
+            job_step(job, "DNS cutover", "ok", str(len(dns_changes)) + " A záznam(y) přepnuty na " + target_public_ip + " · TTL do potvrzení max. 60 s")
         elif detail["domains"]:
             reason = "stejná veřejná IP" if source_public_ip and source_public_ip == target_public_ip else "DNS provider/Public IP není nakonfigurován"
             job_step(job, "DNS cutover", "ok", "Beze změny · " + reason)
-        job["status"] = "success"; job["result"] = {"stack": detail["stack"]["name"], "source": detail["stack"]["endpoint"], "source_endpoint_id": source_id, "source_stack_id": stack_id, "target": target["Name"], "target_endpoint_id": target_id, "target_stack_id": target_stack_id, "volumes": created_volumes, "source_volumes": [v["name"] for v in detail["volumes"]], "source_state": "stopped-retained", "dns_changes": dns_changes}; persist_job(job)
+        job["status"] = "success"; job["result"] = {"stack": detail["stack"]["name"], "source": detail["stack"]["endpoint"], "source_endpoint_id": source_id, "source_stack_id": stack_id, "target": target["Name"], "target_endpoint_id": target_id, "target_stack_id": target_stack_id, "volumes": created_volumes, "source_volumes": [v["name"] for v in detail["volumes"]], "source_state": "stopped-retained", "dns_changes": dns_changes, "backup_volumes": backup_volumes if 'backup_volumes' in locals() else []}; persist_job(job)
     except Exception as exc:
         job["status"] = "rollback"; job["error"] = str(exc); persist_job(job)
         for step in reversed(job["steps"]):

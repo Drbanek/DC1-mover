@@ -63,11 +63,15 @@ async def install_capacity_agent(endpoint_id: int, session=Depends(require_csrf)
             "ExposedPorts": {"9100/tcp": {}},
             "HostConfig": {
                 "Binds": ["/srv:/host/srv:ro", "/var/lib/docker:/host/docker:ro"],
-                "PortBindings": {"9100/tcp": [{"HostIp": host_ip, "HostPort": "9100"}]},
+                
                 "ReadonlyRootfs": True,
                 "Tmpfs": {"/tmp": "rw,noexec,nosuid,size=16m"},
                 "SecurityOpt": ["no-new-privileges:true"],
                 "CapDrop": ["ALL"],
+                "CapAdd": ["NET_ADMIN"],
+                "NetworkMode": "host",
+                "PidMode": "host",
+                "Privileged": False,
                 "RestartPolicy": {"Name": "unless-stopped", "MaximumRetryCount": 0}
             }
         })
@@ -98,6 +102,89 @@ async def install_capacity_agent(endpoint_id: int, session=Depends(require_csrf)
     await remove_container(endpoint_id, container_id)
     raise HTTPException(502, "Capacity Agent se po instalaci nepodařilo ověřit: " + last_error)
 
+
+
+async def agent_firewall(endpoint_id, method="GET", payload=None):
+    settings=get_endpoint_settings().get(int(endpoint_id),{}); url=(settings.get("agent_url") or "").rstrip("/"); token=settings.get("agent_token") or ""
+    if not url or not token: raise RuntimeError("Node Agent is not configured")
+    async with httpx.AsyncClient(timeout=8) as hc:
+        r=await hc.request(method,url+"/firewall",headers={"X-Agent-Token":token},json=payload)
+    if r.status_code != 200: raise RuntimeError("Firewall Agent HTTP "+str(r.status_code)+": "+r.text[:300])
+    return r.json()
+
+@app.get("/api/endpoints/{endpoint_id}/firewall")
+async def firewall_status(endpoint_id:int,session=Depends(require_permission("admin"))):
+    return await agent_firewall(endpoint_id)
+
+@app.put("/api/endpoints/{endpoint_id}/firewall")
+async def firewall_apply(endpoint_id:int,request:Request,session=Depends(require_csrf)):
+    if "admin" not in user_permissions(session.get("user","")): raise HTTPException(403,"Permission denied")
+    p=await request.json(); sources=[str(x).strip() for x in p.get("management_sources",[]) if str(x).strip()]
+    ports=p.get("management_ports") or [9001,9100]
+    return await agent_firewall(endpoint_id,"PUT",{"management_sources":sources,"management_ports":ports})
+
+async def node_readiness(endpoint):
+    """Return an actionable readiness report for any Portainer endpoint."""
+    endpoint_id = int(endpoint["Id"])
+    settings = get_endpoint_settings().get(endpoint_id, {})
+    host_ip, host_ip_source = endpoint_host_ip(endpoint)
+    checks = {
+        "docker": {"ok": False, "message": "Docker API unavailable"},
+        "host_ip": {"ok": bool(host_ip), "message": host_ip or "Host IP could not be detected"},
+        "capacity_agent": {"ok": False, "message": "Not configured"},
+        "data_disk": {"ok": False, "message": "/srv capacity unavailable"},
+        "migration": {"ok": bool(settings.get("migration_enabled")), "message": "Enabled" if settings.get("migration_enabled") else "Disabled"},
+        "firewall": {"ok": False, "message": "Not verified"},
+    }
+    try:
+        info = await docker_request(endpoint_id, "GET", "/info")
+        checks["docker"] = {"ok": info.status_code == 200, "message": "Online" if info.status_code == 200 else "HTTP " + str(info.status_code)}
+    except Exception as exc:
+        checks["docker"]["message"] = str(exc)
+    if settings.get("agent_url") and settings.get("agent_token"):
+        try:
+            data_disk, system_disk = await agent_disk_usage(endpoint_id)
+            checks["capacity_agent"] = {"ok": True, "message": "Online"}
+            checks["data_disk"] = {"ok": True, "message": fmt_bytes(data_disk["free"]) + " free", "free": data_disk["free"], "total": data_disk["total"]}
+        except Exception as exc:
+            checks["capacity_agent"] = {"ok": False, "message": str(exc)}
+        try:
+            fw=await agent_firewall(endpoint_id); checks["firewall"]={"ok":bool(fw.get("managed")),"message":"Managed by DockerStackMover" if fw.get("managed") else "Not managed"}
+        except Exception as exc: checks["firewall"]={"ok":False,"message":str(exc)}
+    ready = all(checks[k]["ok"] for k in ("docker", "host_ip", "capacity_agent", "data_disk", "migration", "firewall"))
+    return {"id": endpoint_id, "name": endpoint.get("Name") or ("Endpoint " + str(endpoint_id)), "ready": ready,
+            "status": "ready" if ready else "setup_required", "host_ip": host_ip, "host_ip_source": host_ip_source,
+            "site": settings.get("site", ""), "public_ip": settings.get("public_ip", ""), "checks": checks}
+
+@app.get("/api/nodes/readiness")
+async def nodes_readiness(session=Depends(require_permission("dashboard_read"))):
+    endpoints = await get_endpoints()
+    result = []
+    for endpoint in endpoints:
+        try:
+            result.append(await node_readiness(endpoint))
+        except Exception as exc:
+            result.append({"id": endpoint.get("Id"), "name": endpoint.get("Name"), "ready": False, "status": "error", "error": str(exc)})
+    return {"nodes": result}
+
+@app.post("/api/endpoints/{endpoint_id}/prepare")
+async def prepare_node(endpoint_id: int, session=Depends(require_csrf)):
+    """Enable migrations and install/repair the Capacity Agent in one action."""
+    if "admin" not in user_permissions(session.get("user", "")):
+        raise HTTPException(403, "Permission denied")
+    endpoints = await get_endpoints()
+    endpoint = next((e for e in endpoints if int(e.get("Id")) == endpoint_id), None)
+    if not endpoint:
+        raise HTTPException(404, "Endpoint not found")
+    settings = get_endpoint_settings().get(endpoint_id, {})
+    host_ip, _ = endpoint_host_ip(endpoint)
+    if not host_ip:
+        raise HTTPException(400, "Host IP se nepodařilo automaticky zjistit. Nastav ji ručně jako override.")
+    save_endpoint_setting(endpoint_id, True, settings.get("host_ip", ""), settings.get("site", ""),
+                          settings.get("public_ip", ""), settings.get("agent_url", ""), None)
+    # Reuse the hardened installer; it persists generated credentials only after verification.
+    await install_capacity_agent(endpoint_id, session)
+    return await node_readiness(endpoint)
 
 def fmt_bytes(value):
     value = float(value or 0); units = ["B", "KB", "MB", "GB", "TB"]
@@ -239,6 +326,9 @@ async def confirm_migration(job_id: str, session=Depends(require_csrf)):
     if result.get("finalized"): return result
     await delete_stack(result["source_stack_id"], result["source_endpoint_id"])
     for volume_name in result.get("source_volumes", []): await delete_volume(result["source_endpoint_id"], volume_name)
+    for change in result.get("dns_changes", []):
+        if change.get("provider") == "vas-hosting":
+            await vas_update_a_record(change["zone"], change["record_id"], change["host"], change["new_content"], change.get("ttl") or 60)
     result["source_state"] = "deleted"; result["finalized"] = "confirmed"; persist_job(job); release_stack_lock(job["stack_id"], job["id"]); return result
 
 @app.post("/api/migrations/{job_id}/rollback")
