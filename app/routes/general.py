@@ -2,7 +2,7 @@ from ..core import *
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "1.12.0"}
+    return {"status": "ok", "version": "1.13.7"}
 
 @app.get("/api/inventory")
 async def inventory(session=Depends(require_permission("migrations"))):
