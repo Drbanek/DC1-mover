@@ -78,7 +78,7 @@ async function saveEndpointSettings(){if(!endpointSettingsDirty)return;const but
 function hasPerm(p){return currentPermissions.includes(p)}
 function applyPermissions(){const rules={tabButtonDashboard:"dashboard_read",tabButtonMigrations:"migrations",tabButtonDns:"dns_read",tabButtonSettings:"admin"};Object.entries(rules).forEach(([id,p])=>{const e=document.getElementById(id);if(e)e.style.display=hasPerm(p)?"":"none"});const nb=document.getElementById("newDnsButton");if(nb)nb.style.display=hasPerm("dns_write")?"":"none";document.querySelectorAll("[data-permission]").forEach(e=>{e.style.display=hasPerm(e.dataset.permission)?"":"none"});const active=document.querySelector(".tab.active");if(active&&active.style.display==="none"){const first=Array.from(document.querySelectorAll(".tab")).find(x=>x.style.display!=="none");if(first)first.click()}}
 async function bootstrap(){try{const s=await getJson("/api/setup/status");if(s.required){document.getElementById("loginOverlay").style.display="none";document.getElementById("setupOverlay").style.display="flex";return}}catch(e){}const ok=await restoreSession();if(ok){if(hasPerm("admin")){loadEndpointSettings();loadAppSettings();loadUsers();loadMaintenance();loadBackups()}if(hasPerm("migrations")){loadStacks();loadHistory()}if(hasPerm("dashboard_read")){loadReadiness();loadCapacity();loadCluster()}}}
-async function runSetup(){const err=document.getElementById("setupError");err.textContent="";const payload={username:document.getElementById("setupUser").value,password:document.getElementById("setupPass").value,portainer_url:document.getElementById("setupPortainerUrl").value,portainer_token:document.getElementById("setupPortainerToken").value,vas_hosting_api_key:document.getElementById("setupVasKey").value,language:document.getElementById("setupLanguage").value};const r=await fetch("/api/setup",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(!r.ok){err.textContent=await r.text();return}err.textContent="✓ Nastavení uloženo. Můžeš se přihlásit.";setTimeout(()=>location.reload(),700)}
+async function runSetup(){const err=document.getElementById("setupError");err.textContent="";const payload={username:document.getElementById("setupUser").value,password:document.getElementById("setupPass").value,language:document.getElementById("setupLanguage").value};const r=await fetch("/api/setup",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(!r.ok){err.textContent=await r.text();return}err.textContent="✓ Nastavení uloženo. Můžeš se přihlásit.";setTimeout(()=>location.reload(),700)}
 async function loadAppSettings(){try{const s=await getJson("/api/app-settings");document.getElementById("cfgPortainerUrl").value=s.portainer_url||"";document.getElementById("cfgVasUrl").value=s.vas_hosting_api_url||"https://portal.vas-hosting.cz/api/v1";document.getElementById("cfgLanguage").value=s.language||"cs";applyLanguage(s.language||"cs");document.getElementById("cfgState").textContent="Portainer token: "+(s.portainer_token_set?"nastaven":"nenastaven")+" · Váš Hosting API: "+(s.vas_hosting_api_key_set?"nastaveno":"nenastaveno")}catch(e){}}
 async function saveAppSettings(){const p={portainer_url:document.getElementById("cfgPortainerUrl").value,portainer_token:document.getElementById("cfgPortainerToken").value,vas_hosting_api_url:document.getElementById("cfgVasUrl").value,vas_hosting_api_key:document.getElementById("cfgVasKey").value,language:document.getElementById("cfgLanguage").value};const r=await fetch("/api/app-settings",{method:"PUT",headers:{"Content-Type":"application/json","X-CSRF-Token":csrfToken},body:JSON.stringify(p)});if(!r.ok){alert(await r.text());return}document.getElementById("cfgState").textContent="✓ Uloženo a aktivní.";document.getElementById("cfgPortainerToken").value="";document.getElementById("cfgVasKey").value="";applyLanguage(p.language)}
 async function changePassword(){const p={current_password:document.getElementById("pwdCurrent").value,new_password:document.getElementById("pwdNew").value};const r=await fetch("/api/account/password",{method:"PUT",headers:{"Content-Type":"application/json","X-CSRF-Token":csrfToken},body:JSON.stringify(p)});if(!r.ok){alert(await r.text());return}document.getElementById("pwdCurrent").value="";document.getElementById("pwdNew").value="";alert("Heslo bylo změněno.")}
@@ -190,3 +190,31 @@ async function provisionServer(){
  finally{b.disabled=false}
 }
 
+
+async function bootstrapFirstPortainer(){
+ const b=document.getElementById("bootButton"),state=document.getElementById("bootState");
+ const p={site:document.getElementById("bootSite").value,host:document.getElementById("bootHost").value,lan_ip:document.getElementById("bootLanIp").value,ssh_user:document.getElementById("bootUser").value,ssh_password:document.getElementById("bootPassword").value,wg_endpoint:document.getElementById("bootWgEndpoint").value};
+ if(!p.site||!p.host||!p.lan_ip||!p.ssh_user||!p.ssh_password){state.className="error";state.textContent="Vyplň lokalitu, SSH/LAN adresu a SSH přihlášení.";return}
+ if(!p.wg_endpoint)p.wg_endpoint=p.lan_ip+":51820";
+ if(!confirm("Připravit "+p.site+"-PORTAINER na "+p.host+"?\n\nNainstaluje se Docker, Portainer Server a centrální WireGuard HUB."))return;
+ b.disabled=true;state.className="muted";state.textContent="Připravuji PORTAINER a WireGuard HUB… první instalace může několik minut trvat.";
+ try{
+  const r=await fetch("/api/bootstrap/portainer",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":csrfToken},body:JSON.stringify(p)});
+  const raw=await r.text();if(!r.ok)throw new Error(raw);const d=JSON.parse(raw);
+  state.className="ready";state.innerHTML="✓ PORTAINER + WG HUB připraven<br>Portainer: "+esc(d.portainer_url)+"<br>WG: "+esc(d.hub_management_ip)+" · "+esc(d.wg_endpoint)+"<br><strong>Jednorázově si ulož Portainer admin heslo:</strong> <code>"+esc(d.portainer_admin_password)+"</code>";
+  document.getElementById("bootPassword").value="";
+  document.getElementById("provSite").value=p.site;
+  document.getElementById("provHubHost").value=p.lan_ip;
+  document.getElementById("provHubUser").value=p.ssh_user;
+  document.getElementById("provHubEndpoint").value=p.wg_endpoint;
+  await loadAppSettings();await loadEndpointSettings();
+ }catch(e){state.className="error";state.textContent="Bootstrap selhal: "+e.message}
+ finally{b.disabled=false}
+}
+document.addEventListener("DOMContentLoaded",()=>{
+ const h=document.getElementById("bootHost"),l=document.getElementById("bootLanIp"),w=document.getElementById("bootWgEndpoint"),p=document.getElementById("bootPassword");
+ if(h)h.addEventListener("input",()=>{if(l&&!l.dataset.manual)l.value=h.value;if(w&&!w.dataset.manual)w.value=h.value? h.value+":51820":""});
+ if(l)l.addEventListener("input",()=>l.dataset.manual="1");
+ if(w)w.addEventListener("input",()=>w.dataset.manual="1");
+ if(p)p.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();bootstrapFirstPortainer()}});
+});
