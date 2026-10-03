@@ -286,8 +286,17 @@ printf 'net.ipv4.ip_forward=1\n' >/etc/sysctl.d/99-dockerstackmover-wg-forward.c
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
 systemctl enable --now wg-quick@wg-dsm
 """, password)
-            hub_pub = _run(conn, "cat /etc/wireguard/hub.pub", password)
-            emit("wireguard", "done", "WG HUB 10.200.0.8 připraven")
+            hub_pub = _run(conn, "cat /etc/wireguard/hub.pub", password).strip()
+
+            # MGMT WireGuard is prepared by install.sh on the host. The app container
+            # only carries its public key to the HUB; it must never require host sudo.
+            mgmt_pub = os.environ.get("DSM_WG_PUBLIC_KEY", "").strip()
+            if not mgmt_pub:
+                raise RuntimeError("MGMT WireGuard není připraven. Aktualizuj MGMT pomocí aktuálního install.sh.")
+            peer_cmd = "wg set wg-dsm peer " + shlex.quote(mgmt_pub) + " allowed-ips 10.200.0.10/32; " + \
+                       "wg-quick save wg-dsm >/dev/null"
+            _run(conn, peer_cmd, password)
+            emit("wireguard", "done", "WG HUB 10.200.0.8 + MGMT 10.200.0.10 připraveny")
 
             emit("portainer", "running", "Instaluji Portainer Server")
             _run(conn, r"""set -e
