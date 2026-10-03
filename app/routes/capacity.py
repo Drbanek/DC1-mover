@@ -274,13 +274,29 @@ async def prepare_node_stream(endpoint_id: int, session=Depends(require_csrf)):
             data_disk, system_disk = await agent_disk_usage(endpoint_id)
             yield ev("disk","done","DATA /srv: "+fmt_bytes(data_disk["free"])+" volno")
 
-            yield ev("firewall","running","Ověřuji správu firewallu přes Node Agent…")
+            yield ev("firewall","running","Nastavuji management firewall přes Node Agent…")
             try:
                 fw=await agent_firewall(endpoint_id)
+                if not fw.get("managed"):
+                    # Portainer Agent is managed from MAIN .8; Capacity Agent from DockerStackMover .10.
+                    applied=await agent_firewall(endpoint_id,"PUT",{
+                        "management_sources":["10.200.0.8","10.200.0.10"],
+                        "management_ports":[9001,9100],
+                        "confirm_timeout":90
+                    })
+                    txid=applied.get("transaction_id")
+                    await asyncio.sleep(1)
+                    # Critical safety check: this request itself traverses 10.200.0.10 -> :9100.
+                    verify=await agent_firewall(endpoint_id)
+                    if not verify.get("managed"):
+                        raise RuntimeError("Firewall pravidla byla aplikována, ale agent je nehlásí jako spravovaná.")
+                    if txid:
+                        confirmed=await agent_firewall(endpoint_id,"POST",suffix="/confirm/"+txid)
+                    fw=await agent_firewall(endpoint_id)
                 if fw.get("managed"):
-                    yield ev("firewall","done","Firewall spravuje DockerStackMover")
+                    yield ev("firewall","done","Management firewall nastaven a ověřen")
                 else:
-                    yield ev("firewall","error","Firewall zatím není spravován DockerStackMoverem"); return
+                    yield ev("firewall","error","Firewall se nepodařilo převzít pod správu DockerStackMoveru"); return
             except Exception as exc:
                 yield ev("firewall","error",str(exc)); return
 
