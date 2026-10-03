@@ -145,8 +145,8 @@ systemctl enable --now wg-quick@wg-dsm"""
   exit 0
 fi
 ROOT_SRC=$(findmnt -no SOURCE /)
-ROOT_PARENT=$(lsblk -no PKNAME "$ROOT_SRC" 2>/dev/null || true)
-ROOT_DISK="/dev/$ROOT_PARENT"
+ROOT_DISK=$(lsblk -s -npo NAME,TYPE "$ROOT_SRC" 2>/dev/null | awk '$2=="disk"{print $1; exit}')
+[ -n "$ROOT_DISK" ] || exit 40
 REQUESTED=__DATA_DISK__
 if [ "$REQUESTED" = AUTO ]; then
   CANDIDATES=""
