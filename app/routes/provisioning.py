@@ -199,12 +199,14 @@ echo "CREATED $DISK -> $PART -> /srv"
 """
             diskcmd = diskcmd.replace("__DATA_DISK__", shlex.quote(data_disk or "AUTO"))
             disk_result = _run(target,diskcmd,password,900)
-            steps.append("DATA disk OK: "+disk_result.splitlines()[-1]); progress("data_disk","done","DATA disk OK: "+disk_result.splitlines()[-1])
+            disk_detail=disk_result.splitlines()[-1]
+            steps.append("DATA disk OK: "+disk_detail); progress("data_disk","done","DATA disk OK: "+disk_detail)
         progress("docker","running","Instaluji/opravuji Docker a Portainer Agent…")
         docker="""if ! command -v docker >/dev/null; then install -m 0755 -d /etc/apt/keyrings; curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc; chmod a+r /etc/apt/keyrings/docker.asc; . /etc/os-release; echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $VERSION_CODENAME stable" >/etc/apt/sources.list.d/docker.list; apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; fi
 systemctl enable --now docker
-systemctl restart docker
-sleep 2
+# Repair-safe: never restart Docker on an existing NODE; that would interrupt workloads.
+# If Docker was just installed, enable --now already started it.
+docker info >/dev/null
 docker rm -f portainer_agent >/dev/null 2>&1 || true
 docker pull portainer/agent:2.45.1
 docker run -d --name portainer_agent --restart=always -p 9001:9001 -v /var/run/docker.sock:/var/run/docker.sock -v /var/lib/docker/volumes:/var/lib/docker/volumes -v /:/host portainer/agent:2.45.1 >/dev/null
@@ -297,6 +299,17 @@ async def provision_server_stream(request: Request, session=Depends(require_csrf
                     endpoint_id=(match or {}).get("Id")
             if endpoint_id is None:
                 yield json.dumps({"type":"error","step":"portainer","detail":"Portainer endpoint existuje, ale nepodařilo se zjistit jeho ID pro uložení nastavení."},ensure_ascii=False)+"\n"; return
+            # Repair mode: an existing Portainer endpoint may still point to the old LAN IP.
+            # Move it to the WireGuard management address instead of merely accepting HTTP 409.
+            if r.status_code == 409:
+                async with client() as uc:
+                    ur=await uc.put("/api/endpoints/"+str(endpoint_id),data={
+                        "Name":result["name"],"URL":"tcp://"+result["management_ip"]+":9001",
+                        "TLS":"true","TLSSkipVerify":"true","TLSSkipClientVerify":"true"
+                    })
+                if ur.status_code not in (200,204):
+                    yield json.dumps({"type":"error","step":"portainer","detail":"Existující Portainer endpoint se nepodařilo přepnout na management IP: "+ur.text},ensure_ascii=False)+"\n"; return
+                detail="Portainer environment repaired → "+result["management_ip"]
             result["portainer_endpoint_id"]=endpoint_id
             agent_url="http://"+result["management_ip"]+":9100" if result["role"]=="NODE" else ""
             save_endpoint_setting(endpoint_id, result["role"]=="NODE", result["management_ip"], result["site"], "", agent_url, role=result["role"])
@@ -333,6 +346,14 @@ async def provision_server(request: Request, session=Depends(require_csrf)):
                 endpoint_id=(match or {}).get("Id")
         if endpoint_id is None:
             raise HTTPException(502,"Portainer endpoint existuje, ale nepodařilo se zjistit jeho ID pro uložení nastavení.")
+        if r.status_code == 409:
+            async with client() as uc:
+                ur=await uc.put("/api/endpoints/"+str(endpoint_id),data={
+                    "Name":result["name"],"URL":"tcp://"+result["management_ip"]+":9001",
+                    "TLS":"true","TLSSkipVerify":"true","TLSSkipClientVerify":"true"
+                })
+            if ur.status_code not in (200,204):
+                raise HTTPException(502,"Existující Portainer endpoint se nepodařilo přepnout na management IP: "+ur.text)
         result["portainer_endpoint_id"]=endpoint_id
         agent_url="http://"+result["management_ip"]+":9100" if result["role"]=="NODE" else ""
         save_endpoint_setting(endpoint_id, result["role"]=="NODE", result["management_ip"], result["site"], "", agent_url, role=result["role"])
