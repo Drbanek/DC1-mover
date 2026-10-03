@@ -85,7 +85,7 @@ async def _run_proxy_helper(proxy_id, cmd, env=None, host_network=False, binds=N
 
 
 async def _write_dynamic_file(proxy_id, filename, content):
-    if not re.fullmatch(r"[a-z0-9._-]+\\.ya?ml", filename):
+    if not re.fullmatch(r"[a-z0-9._-]+\.ya?ml", filename):
         raise RuntimeError("Unsafe Traefik filename")
     if not content.strip():
         raise RuntimeError("Refusing to write empty Traefik configuration")
