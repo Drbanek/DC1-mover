@@ -135,24 +135,13 @@ systemctl enable --now wg-quick@wg-dsm"""
         steps.append("WireGuard handshake OK")
         docker="""if ! command -v docker >/dev/null; then install -m 0755 -d /etc/apt/keyrings; curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc; chmod a+r /etc/apt/keyrings/docker.asc; . /etc/os-release; echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $VERSION_CODENAME stable" >/etc/apt/sources.list.d/docker.list; apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; fi
 systemctl enable --now docker
-# A stale/missing DOCKER nat chain can remain after firewall changes or a fresh
-# Docker install. Verify Docker's own NAT state before publishing Agent ports.
-if ! iptables -t nat -S DOCKER >/dev/null 2>&1; then
-  systemctl restart docker
-  for i in $(seq 1 15); do
-    iptables -t nat -S DOCKER >/dev/null 2>&1 && break
-    sleep 1
-  done
-fi
-iptables -t nat -S DOCKER >/dev/null 2>&1 || (echo "Docker NAT chain DOCKER is unavailable after restart" >&2; exit 1)
-docker pull portainer/agent:2.45.1
+systemctl restart docker
+sleep 2
 docker rm -f portainer_agent >/dev/null 2>&1 || true
+docker pull portainer/agent:2.45.1
 docker run -d --name portainer_agent --restart=always -p 9001:9001 -v /var/run/docker.sock:/var/run/docker.sock -v /var/lib/docker/volumes:/var/lib/docker/volumes -v /:/host portainer/agent:2.45.1 >/dev/null
-# Do not continue to firewall/Portainer registration unless 9001 is actually
-# published and the Agent container is running.
-docker inspect -f '{{.State.Running}}' portainer_agent | grep -qx true
-docker port portainer_agent 9001/tcp | grep -q '9001/tcp'
-"""
+docker ps --filter name=portainer_agent --filter status=running --format '{{.Names}}' | grep -qx portainer_agent
+docker port portainer_agent 9001/tcp | grep -q 9001"""
         _run(target,docker,password,900)
         steps.append("Docker + Portainer Agent OK")
         fw=f"""systemctl enable --now nftables
