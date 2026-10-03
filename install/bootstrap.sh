@@ -23,7 +23,8 @@ CUR_IP=${CIDR%/*}
 [[ "$PREFIX" == 24 ]] || die "Automatické adresování v1.12 podporuje /24; zjištěno /$PREFIX."
 BASE=$(awk -F. '{print $1"."$2"."$3}' <<<"$CUR_IP")
 
-ask SITE "Lokalita (např. DC2)" "DC2"
+ask SITE "Označení lokality (např. DC1, DC2, PRAHA, PLZEN)" ""
+[[ -n "$SITE" ]] || die "Označení lokality je povinné."
 SITE=${SITE^^}
 echo "Role: 1=PROXY  2=NODE  3=PORTAINER (MAIN)  4=MGMT (MAIN)"
 read -rp "Vyber roli: " ROLE_N
@@ -39,6 +40,9 @@ esac
 TARGET_IP="$BASE.$LAST"
 PORTAINER_EXT=$((9000+LAST)); NODE_AGENT_EXT=$((9100+LAST))
 ask PUBLIC_IP "Veřejná IPv4 lokality (prázdné = pouze LAN)" ""
+if [[ -n "$PUBLIC_IP" ]]; then
+ python3 -c 'import ipaddress,sys; a=ipaddress.ip_address(sys.argv[1]); assert a.version==4' "$PUBLIC_IP" || die "Neplatná veřejná IPv4."
+fi
 echo
 echo "Rozhraní: $DEF_IF  Aktuální: $CIDR  Gateway: $GW"
 echo "Cíl: $HOSTNAME_NEW  $TARGET_IP/$PREFIX  Role: $ROLE  Site: $SITE"
