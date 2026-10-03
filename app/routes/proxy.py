@@ -87,7 +87,7 @@ async def _write_dynamic_file(proxy_id, filename, content):
         raise RuntimeError("Unsafe Traefik filename")
     await _run_proxy_helper(
         proxy_id,
-        'umask 022; printf "%s" "$DSM_CONFIG" >"/dynamic/$DSM_FILE.tmp"; mv "/dynamic/$DSM_FILE.tmp" "/dynamic/$DSM_FILE"',
+        'umask 022; tmp="/dynamic/.$DSM_FILE.tmp.$"; printf "%s" "$DSM_CONFIG" >"$tmp"; mv -f "$tmp" "/dynamic/$DSM_FILE"; test -s "/dynamic/$DSM_FILE"',
         env=["DSM_FILE=" + filename, "DSM_CONFIG=" + content],
         binds=["/opt/traefik/dynamic:/dynamic"],
     )
