@@ -304,8 +304,29 @@ exit 51
             emit("portainer", "done", "Portainer běží")
 
             if host != lan_ip:
-                emit("lan", "running", "Přepínám PORTAINER na standardní LAN adresu " + lan_ip)
-                dns_yaml = dns or gateway
+                emit("lan", "running", "Ověřuji a přepínám PORTAINER na " + lan_ip)
+                network = ipaddress.ip_network(cidr, strict=False)
+                target = ipaddress.ip_address(lan_ip)
+                if target not in network or target in (network.network_address, network.broadcast_address):
+                    raise RuntimeError(f"Cílová LAN IP {lan_ip} není použitelná v síti {network}.")
+                dns_addrs = []
+                for value in dns.split(","):
+                    value = value.strip().split("%", 1)[0]
+                    try:
+                        ipaddress.ip_address(value)
+                        dns_addrs.append(value)
+                    except ValueError:
+                        pass
+                if not dns_addrs:
+                    dns_addrs = [gateway]
+                dns_yaml = ", ".join(dns_addrs)
+                # Duplicate Address Detection on the actual L2 segment. arping -D returns
+                # success only when no peer answers for the candidate address.
+                duplicate = _run(conn, "if arping -D -I " + shlex.quote(iface) + " -c 2 -w 3 " +
+                                 shlex.quote(lan_ip) + " >/dev/null 2>&1; then echo FREE; else echo USED; fi",
+                                 password)
+                if duplicate.strip() != "FREE":
+                    raise RuntimeError("Cílová LAN IP " + lan_ip + " už je na síti obsazená.")
                 switch = r"""set -e
 NETPLAN=$(find /etc/netplan -maxdepth 1 -type f \( -name '*.yaml' -o -name '*.yml' \) | head -n1)
 test -n "$NETPLAN"
@@ -326,10 +347,12 @@ network:
         addresses: [__DNS__]
 EOF
 chmod 600 "$NETPLAN"
+netplan generate
 nohup bash -c 'sleep 2; netplan apply' >/var/log/dockerstackmover-portainer-ip-switch.log 2>&1 &
 """.replace("__IFACE__", iface).replace("__LAN__", lan_ip).replace("__PREFIX__", prefix).replace("__GW__", gateway).replace("__DNS__", dns_yaml)
                 _run(conn, switch, password)
-                emit("lan", "done", "LAN IP se mění na " + lan_ip)
+                # Do not report success merely because the asynchronous switch was scheduled.
+                # The API stage verifies the new address; keep this step running until then.
             else:
                 emit("lan", "done", "LAN IP už je " + lan_ip)
         except Exception as exc:
@@ -349,6 +372,7 @@ nohup bash -c 'sleep 2; netplan apply' >/var/log/dockerstackmover-portainer-ip-s
                     async with httpx.AsyncClient(base_url=url, verify=False, timeout=4) as pc:
                         s = await pc.get("/api/status")
                         if s.status_code == 200:
+                            emit("lan", "done", "LAN IP ověřena: " + lan_ip)
                             break
                 except Exception as exc:
                     last = exc
