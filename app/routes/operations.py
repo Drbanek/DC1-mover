@@ -65,12 +65,37 @@ async def backup_inventory(session=Depends(require_permission("admin"))):
         rows=conn.execute("SELECT key,value,updated_at FROM app_settings WHERE key LIKE 'backup:%' ORDER BY updated_at DESC").fetchall()
     return {"backups":[{"key":r["key"],"value":json.loads(r["value"]),"updated_at":r["updated_at"]} for r in rows]}
 
-@app.post("/api/stacks/{stack_id}/backup-manifest")
-async def create_backup_manifest(stack_id:int,session=Depends(require_csrf)):
+@app.post("/api/stacks/{stack_id}/backup")
+async def create_stack_backup(stack_id:int,session=Depends(require_csrf)):
     if "admin" not in user_permissions(session.get("user","")) and "migrations" not in user_permissions(session.get("user","")): raise HTTPException(403,"Permission denied")
-    detail=await build_detail(stack_id); stack_file=await get_stack_file(stack_id)
-    backup_id=uuid.uuid4().hex
-    manifest={"id":backup_id,"created_at":utcnow(),"stack":detail["stack"],"volumes":[v["name"] for v in detail["volumes"]],
-              "domains":detail["domains"],"stack_file":stack_file,"type":"manifest"}
+    detail=await build_detail(stack_id); stack_file=await get_stack_file(stack_id); endpoint_id=int(detail["stack"]["endpoint_id"])
+    backup_id=uuid.uuid4().hex[:12]; copies=[]; stopped=False
+    try:
+        await stop_stack(stack_id,endpoint_id); stopped=True; await asyncio.sleep(2)
+        for volume in detail["volumes"]:
+            source=volume["name"]; target="dsm-backup-"+backup_id+"-"+source
+            await create_volume(endpoint_id,target,volume.get("driver") or "local")
+            await copy_volume(endpoint_id,endpoint_id,source,target); copies.append({"source":source,"backup":target})
+    finally:
+        if stopped: await start_stack(stack_id,endpoint_id)
+    manifest={"id":backup_id,"created_at":utcnow(),"stack":detail["stack"],"volumes":copies,
+              "domains":detail["domains"],"stack_file":stack_file,"type":"local-volume-snapshot"}
     setting_set("backup:"+backup_id,json.dumps(manifest))
     return manifest
+
+@app.post("/api/backups/{backup_id}/restore")
+async def restore_stack_backup(backup_id:str,session=Depends(require_csrf)):
+    if "admin" not in user_permissions(session.get("user","")): raise HTTPException(403,"Permission denied")
+    raw=setting_get("backup:"+backup_id,"")
+    if not raw: raise HTTPException(404,"Backup not found")
+    manifest=json.loads(raw); endpoint_id=int(manifest["stack"]["endpoint_id"]); stack_id=int(manifest["stack"]["id"]); stopped=False
+    try:
+        await stop_stack(stack_id,endpoint_id); stopped=True; await asyncio.sleep(2)
+        for item in manifest.get("volumes",[]):
+            source=item["source"]; backup=item["backup"]
+            await docker_request(endpoint_id,"DELETE","/volumes/"+source)
+            await create_volume(endpoint_id,source)
+            await copy_volume(endpoint_id,endpoint_id,backup,source)
+    finally:
+        if stopped: await start_stack(stack_id,endpoint_id)
+    return {"ok":True,"backup_id":backup_id}
