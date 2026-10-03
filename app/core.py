@@ -298,14 +298,15 @@ async def create_volume(endpoint_id, name, driver="local"):
         if r.status_code not in (200, 201): raise HTTPException(r.status_code, "Volume create failed: " + r.text)
         return r.json()
 
-async def copy_volume(source_id, target_id, volume_name):
+async def copy_volume(source_id, target_id, volume_name, target_volume_name=None):
+    target_volume_name = target_volume_name or volume_name
     helper_image = "alpine:3.22"; await ensure_image(source_id, helper_image); await ensure_image(target_id, helper_image)
     src_name = "dc1-mover-src-" + uuid.uuid4().hex[:10]; dst_name = "dc1-mover-dst-" + uuid.uuid4().hex[:10]; src_id = None; dst_id = None
     try:
         r = await docker_request(source_id, "POST", "/containers/create", params={"name": src_name}, json={"Image": helper_image, "Cmd": ["sh", "-c", "true"], "HostConfig": {"Mounts": [{"Type": "volume", "Source": volume_name, "Target": "/volume", "ReadOnly": True}]}})
         if r.status_code != 201: raise HTTPException(r.status_code, "Source helper create failed: " + r.text)
         src_id = r.json()["Id"]
-        r = await docker_request(target_id, "POST", "/containers/create", params={"name": dst_name}, json={"Image": helper_image, "Cmd": ["sh", "-c", "true"], "HostConfig": {"Mounts": [{"Type": "volume", "Source": volume_name, "Target": "/volume"}]}})
+        r = await docker_request(target_id, "POST", "/containers/create", params={"name": dst_name}, json={"Image": helper_image, "Cmd": ["sh", "-c", "true"], "HostConfig": {"Mounts": [{"Type": "volume", "Source": target_volume_name, "Target": "/volume"}]}})
         if r.status_code != 201: raise HTTPException(r.status_code, "Target helper create failed: " + r.text)
         dst_id = r.json()["Id"]
         async with client() as c:
